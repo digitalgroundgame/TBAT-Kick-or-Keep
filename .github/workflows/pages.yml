@@ -40,9 +40,47 @@ jobs:
           set -eu
           mkdir -p site
           cp overlay.html control-room.html manifest.json EVENTS.md README.md site/
+          # relay.js and README-kit.md are LINKED from the control room, so a
+          # site without them serves a page whose download buttons 404 while
+          # looking perfectly fine.
+          cp relay.js README-kit.md site/
           # The control room is the landing page: the overlay is transparent by
           # design and looks like nothing on its own.
           cp control-room.html site/index.html
+          ls -la site
+
+      - name: Build the kit zip the demo offers
+        run: |
+          set -eu
+          # kit.zip is NOT committed -- a build artifact in git history is paid
+          # for by every clone forever, and a rebuild adds a copy rather than
+          # replacing one. So it is built here, from the files verify.mjs has
+          # already checked, and laid out exactly as the upstream kit is.
+          rm -rf kitbuild && mkdir -p kitbuild/tugofwar-kit
+          cp overlay.html control-room.html relay.js EVENTS.md kitbuild/tugofwar-kit/
+          cp README-kit.md kitbuild/tugofwar-kit/README.md
+          cp manifest.json kitbuild/tugofwar-kit/
+          # python3's stdlib rather than the `zip` binary: one less thing that
+          # has to happen to be installed on the runner image.
+          ( cd kitbuild && python3 -m zipfile -c ../site/kit.zip tugofwar-kit )
+          ( cd site && sha256sum kit.zip > kit.zip.sha256 )
+          # A zip whose members do not match the manifest served beside it is
+          # the exact drift this repo's one-writer rule exists to prevent, so
+          # refuse to publish rather than ship it.
+          node -e '
+            const fs = require("fs"), cp = require("child_process");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            const crypto = require("crypto");
+            const local = { "README.md": "README-kit.md" };
+            let bad = 0;
+            for (const [name, meta] of Object.entries(m.files)) {
+              const buf = fs.readFileSync(local[name] || name);
+              const sha = crypto.createHash("sha256").update(buf).digest("hex");
+              if (sha !== meta.sha256) { bad++; console.error("MISMATCH " + name); }
+            }
+            if (bad) { console.error("refusing to publish a kit that disagrees with its manifest"); process.exit(1); }
+            console.log("kit.zip matches manifest.json (" + Object.keys(m.files).length + " files)");
+          '
           ls -la site
       - uses: actions/upload-pages-artifact@v3
         with:
