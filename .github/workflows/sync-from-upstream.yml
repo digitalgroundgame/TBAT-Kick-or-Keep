@@ -70,11 +70,10 @@ jobs:
       - name: Strip provenance the manifest should not publish
         run: |
           set -euo pipefail
-          # manifest.json is the one file nothing can hash-check -- it cannot
-          # contain its own hash -- and it is the one that has carried internal
-          # provenance before: a source path, and a changelog of internal commit
-          # subjects. Upstream no longer emits either. This repo does not rely
-          # on that; it strips them itself, on every sync.
+          # manifest.json is the one file nothing can hash-check, because it
+          # cannot contain its own hash. Upstream does not put build provenance
+          # in it -- and this repo does not depend on that promise, so it strips
+          # those keys itself on every sync.
           node -e '
             const fs = require("fs");
             const m = JSON.parse(fs.readFileSync(".sync/manifest.json", "utf8"));

@@ -5,7 +5,8 @@ source, an operator control room, and a tiny WebSocket relay that keeps the two
 in step. It runs off a USB stick on the streaming rig with **no connection to
 any platform, no account and no network**.
 
-Kit version `2026.09.06.cc56e40` — see [`manifest.json`](manifest.json) for per-file hashes.
+The build you have is named in [`manifest.json`](manifest.json), and
+`node relay.js` prints it on every start.
 
 ## Run the whole show — one command
 
@@ -43,12 +44,12 @@ settings already in it.
 | `big=` | cents at which a donation pops its amount on screen |
 | `left=` / `right=` | the two keywords (default `kick` / `keep`) |
 | `ws=` / `poll=` | a live donation feed — see [EVENTS.md](EVENTS.md) |
-| `theme=` | `tbat` (default), `aither`, `mono`, or four hex overrides |
+| `theme=` | `tbat` (default), `warm`, `mono`, or four hex overrides |
 | `demo=1` | synthesise donations, so it can be shown with no feed wired |
 
-`goal`, `guarantee` and `big` have silent floors — 100 cents, 10 seconds and
-1 cent. Asking for less is quietly raised, not refused, so a segment set below
-one of them runs on a value nobody chose.
+`goal`, `guarantee` and `big` have floors — 100 cents, 10 seconds and 1 cent.
+Ask for less and you are given the floor, with no error and no warning. Type 30
+for the guarantee and you get 30; type 5 and you silently get 10.
 
 ## The mechanic
 
@@ -74,14 +75,12 @@ cannot test for you.
 
 ## Where these files come from
 
-This repository is a **published copy**. The single source is
-`overlay-html.ts` in the Aitherium monorepo, where the panel renders it, the
-test suite evaluates it and the emitter extracts it — one copy, so a generated
-twin can never drift from a hand-edited original.
+This repository is a **published copy**, generated from a single source and
+refreshed automatically.
 
 **Edits made directly here are reverted by the next sync.** To change the
-widget, open an issue on this repo or send it to the Aitherium team, and the
-change flows back here automatically with a new version in `manifest.json`.
+widget, open an issue on this repo, and the change comes back through the same
+lane with a new version in `manifest.json`.
 
 ## Reporting a problem
 

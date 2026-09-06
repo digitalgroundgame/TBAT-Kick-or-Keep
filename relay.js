@@ -71,11 +71,10 @@ function tryParseFrame(buf) {
   return { fin, op, payload, consumed: off + len };
 }
 
-/** The kit manifest (version, source commit, per-file sha256) written beside
- *  relay.js by the emitter. Null when absent -- an unversioned/hand-copied kit.
- *  The version is printed on every start so a customer's paste or screenshot
- *  identifies the exact build: the 2026-09-01 "spins forever" report could not
- *  be tied to a build for an hour because nothing in the kit said which it was. */
+/** The kit manifest written beside relay.js: version, source commit, per-file
+ *  sha256. Null when it is absent, which means a hand-copied kit. The version
+ *  prints on every start, so a screenshot or a pasted line names the exact
+ *  build someone is running. */
 function kitManifest() {
   try {
     return JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "manifest.json"), "utf8"));
@@ -152,13 +151,9 @@ function handle(socket) {
     if (!socket.destroyed) socket.write(encodeTextFrame(text));
   }
   function broadcast(text, except) {
-    // Encode ONCE, and encode AT ALL. Writing raw text into a WebSocket is a
-    // protocol violation: the browser answers it by CLOSING the socket, which
-    // the overlay surfaces as "ws: reconnecting" on a 3s loop forever.
-    // sendText() has always encoded; this path never did, so every control-room
-    // message killed the OBS socket instead of driving it. Customer-reported
-    // 2026-09-02 -- and the relay --selftest passed throughout, because it
-    // asserted a SUBSTRING over raw bytes, which a raw-text write satisfies.
+    // Encode once, and encode at all. Raw text in a WebSocket is a protocol
+    // violation: the browser answers it by closing the socket, and the overlay
+    // then shows "ws: reconnecting" in a 3s loop forever.
     const frame = encodeTextFrame(text);
     for (const c of CLIENTS) if (c !== except && !c.destroyed) c.write(frame);
   }
@@ -172,17 +167,18 @@ function handle(socket) {
       buf = buf.slice(i + 4);
       const m = req.match(/Sec-WebSocket-Key: ([^\r\n]+)/i);
       if (!m) { serveHttp(socket, req); return; }
-      // ORIGIN GATE. A WebSocket is exempt from the same-origin policy, so
-      // ANY page the operator happens to have open can connect to this relay
-      // and drive the graphic that is on air -- fake a donation, kick the
-      // guest, reset the board. Binding to 127.0.0.1 does not prevent it;
-      // the attacker is a tab, not a host on the network.
+      // ORIGIN GATE. A WebSocket is not covered by the same-origin policy.
+      // Without this check, any page the operator happens to have open could
+      // connect and drive the graphic that is on air -- fake a donation, kick
+      // the guest, reset the board. Binding to 127.0.0.1 does not help: the
+      // caller is a browser tab, not a machine on the network.
       //
-      // Allowed: no Origin at all (a native client -- node, OBS in some
-      // builds, --selftest), or this relay's own loopback origin, which is
-      // where the control room and the OBS overlay are served from. An
-      // overlay hosted somewhere else and pointed here with ?ws= is a real
-      // setup, so it has a supported door rather than a silent refusal:
+      // Still allowed: a request with no Origin at all (a native client),
+      // and this relay's own address, which is where it serves the control
+      // room and the overlay from.
+      //
+      // Hosting the overlay somewhere else and pointing it here is a real
+      // setup, so it has a door rather than a silent refusal:
       //   node relay.js --allow-origin https://your.host
       if (!originAllowed(req)) {
         console.error("relay: refused a WebSocket from a foreign origin -- "
@@ -224,9 +220,9 @@ function handle(socket) {
 function serve(port) {
   const server = net.createServer(handle);
   server.listen(port, "127.0.0.1", () => {
-    // Announce the BOUND port, not the requested one: "node relay.js 0"
-    // (or a busy 8787 fallback) would otherwise print a URL that does not
-    // connect. Measured 2026-09-01 -- the offline-kit test caught it.
+    // Announce the port we actually bound, not the one that was asked for.
+    // "node relay.js 0" means any free port, so the requested number is often
+    // not the one to type into OBS.
     const actual = server.address().port;
     BOUND_PORT = actual;
     const mf = kitManifest();
@@ -267,13 +263,11 @@ function selftest() {
     let handshaken = false;
     let buf = Buffer.alloc(0);
     const got = [];
-    // Decode frames the way a BROWSER does. The previous assertion was
-    // body.includes("hello") -- a SUBSTRING over raw wire bytes, which a correct
-    // frame and an unencoded raw-text write satisfy EQUALLY. So it could not
-    // distinguish the 2026-09-02 broadcast defect from its fix: it stayed green
-    // while every real client closed the socket on a protocol violation, and a
-    // customer became the detector. Parse, and refuse anything that is not a
-    // well-formed unmasked text frame.
+    // Decode frames the way a BROWSER does, and refuse anything that is not a
+    // well-formed unmasked text frame. Searching the raw bytes for the
+    // message text is not enough: that passes on a correct frame and on
+    // unencoded raw text alike, so it cannot tell a working relay from one
+    // every real client hangs up on.
     function drain() {
       for (;;) {
         if (buf.length < 2) return;
@@ -329,10 +323,8 @@ if (process.argv.includes("--selftest")) {
   console.log(mf && mf.version ? mf.version : "unversioned");
 } else {
   const port = parseInt(process.argv[2] || "8787", 10);
-  // 0 is ALLOWED and means "any free port". serve() announces the port it
-  // actually bound, so nothing downstream has to guess -- and serve()'s own
-  // comment already told people to run "node relay.js 0" while this guard
-  // refused it, which is a documented invocation that has never once worked.
+  // 0 is allowed and means "any free port". serve() prints the port it
+  // actually bound, so nothing has to guess which one to use.
   if (!Number.isFinite(port) || port < 0 || port > 65535) {
     console.error("bad port: " + process.argv[2]);
     process.exit(1);

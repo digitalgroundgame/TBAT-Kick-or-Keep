@@ -1,14 +1,47 @@
-# Event contract -- what the overlay actually reads
+# Sending donations to the overlay
 
-Written for whoever wires a donation feed to this graphic. Every statement here
-is a description of the shipped `overlay.html` in this same kit, not a plan.
+For whoever wires a donation feed to this graphic. Everything below describes
+the `overlay.html` shipped in this same kit -- it is not a plan for one.
 
 The overlay is deliberately dumb about your platform: it never authenticates,
 never calls your API, and knows nothing about donors. It reads **an amount and
 a piece of text**, decides which side the text voted for, and moves the bar.
 Everything else in an event is ignored.
 
-## 1. The three doors, and the one difference that matters
+## Send this
+
+Start the bundled relay, then send one JSON object per WebSocket frame:
+
+```js
+const ws = new WebSocket("ws://127.0.0.1:8787");
+ws.onopen = () => ws.send(JSON.stringify({
+  type: "donation",
+  payload: { id: "evt-1041", amount_cents: 2500, message: "kick him out" }
+}));
+```
+
+That is $25 toward kicking the guest, and the bar moves the moment it arrives.
+Change the message to `"keep him on"` and the same $25 pushes the goal further
+away instead.
+
+Three fields do all the work:
+
+- **`amount_cents`** -- integer cents. (`amount` in dollars also works.)
+- **`message`** -- the donor's text. The overlay looks for the word `kick` or
+  the word `keep` in it and picks a side. Neither word, or both, means the
+  donation counts but does not vote.
+- **`id`** -- your own event id. Send the same id twice and the second one is
+  ignored, which is what makes re-delivery safe.
+
+Prefer HTTP? Point the overlay at a URL with `?poll=` and answer with
+`{ "events": [ ... ] }` holding the same objects. One thing to know before you
+choose: **the poll lane carries donations only.** Operator controls -- start
+the next guest, reset the board -- are ignored on that lane. Section 1 has the
+comparison.
+
+Everything from here down is reference.
+
+## 1. Three ways to send events
 
 | door | how it is turned on | what it accepts |
 |---|---|---|
@@ -16,12 +49,14 @@ Everything else in an event is ignored.
 | WebSocket | `?ws=ws://host:port` | the FULL envelope (donations + operator control) |
 | HTTP poll | `?poll=https://host/path` | **donations only** |
 
-**The poll lane cannot carry operator control.** Polled items go straight to the
-donation path, so `play`, `reset`, `clear`, `window` and `setgoal` sent that way
-are silently ignored -- they are not errors and nothing will log them. Use the
-relay (`?ws=`) for anything the operator drives; use `?poll=` for money only.
+**Donations work on all three lanes. Operator controls work on two.**
+Anything the overlay reads from a polled URL is treated as a donation, so
+`play`, `reset`, `clear`, `window` and `setgoal` sent that way do nothing at
+all. There is no error and no log line, so if a control seems to be ignored,
+check which lane it went down. Use `?ws=` for anything the operator drives, and
+`?poll=` for money only.
 
-## 2. A donation event: the four fields that are read
+## 2. What a donation event may contain
 
 ```json
 { "id": "abc123", "amount_cents": 2500, "message": "kick him" }
@@ -45,7 +80,7 @@ An event with no usable amount, or with text that names no side, is **not an
 error**. It is a donation that was not a vote. The bar does not move and the
 overlay stays silent about it.
 
-## 3. How a side is chosen
+## 3. How the overlay decides kick or keep
 
 The text is lowercased and each keyword is matched on a WORD BOUNDARY:
 
@@ -72,7 +107,7 @@ An event with **no** `id` is always counted, every time it arrives. For a polled
 feed that means a rolling window without ids will multiply every donation by the
 number of polls it appears in. Send ids.
 
-## 5. The poll lane in detail
+## 5. Sending over HTTP (?poll=)
 
     fetch(url, { cache: "no-store" })   every 5000 ms
 
@@ -100,7 +135,7 @@ A minimal endpoint answers:
 
 That is $5 to the pot, $25 onto the goal, and a $10 donation that was not a vote.
 
-## 6. The WebSocket lane in detail
+## 6. Sending over a WebSocket (?ws=)
 
 One JSON object per frame. Both of these are accepted for a donation:
 
@@ -114,7 +149,7 @@ after a drop and shows `ws: reconnecting` while it is down. The bundled
 `relay.js` broadcasts each frame to every OTHER client, so the control room and
 the OBS copy stay in step without echoing back to the sender.
 
-## 7. Operator control (postMessage and WebSocket only)
+## 7. Driving the show: start, reset, set the goal
 
 | envelope | effect |
 |---|---|
@@ -125,17 +160,15 @@ the OBS copy stay in step without echoing back to the sender.
 | `{"type":"setgoal","goal_cents":50000}` | set the goal outright (`goal` also accepted) |
 | `{"type":"snapshot"}` | ask for the live state; the reply is posted back to the sender |
 
-`play` (and its twin `reset`) does four things in one: it clears a held KICKED
-splash, resets the board, starts the new guest's clock from that moment, and
-lands every donation buffered during the hold onto the fresh board.
+`play` and its twin `reset` mean the same thing: the next guest is seated.
+Both clear a held KICKED splash, reset the board, start the new guest's clock
+from that moment, and land every donation buffered during the hold.
 
-**While the KICKED splash is held, `clear` and `window` do nothing.** Only
-`play`/`reset` end a hold -- the operator explicitly starting the next guest.
-That is deliberate: a mis-click must not clear the splash the hold exists to
-keep on screen, and a `window` during a hold would otherwise resume the guest
-who was just kicked and count them as kicked a second time.
+**While the splash is held, `clear` and `window` do nothing.** Only `play` and
+`reset` end a hold. That is deliberate: the message exists so nothing moves on
+until the operator says so, and a mis-click should not be able to clear it.
 
-## 8. The snapshot reply
+## 8. Reading the overlay's current state
 
 ```json
 { "type": "snapshot", "payload": {
@@ -146,11 +179,11 @@ who was just kicked and count them as kicked a second time.
 ```
 
 `held` is true while the KICKED message is up and the board is frozen between
-guests -- that is the flag the control room's play button is drawn from. All
+guests -- read `held` to know whether to offer a start button. All
 amounts are integer CENTS and all times are epoch milliseconds. `guarantee` is
 sent so a control surface never hardcodes its own copy of the segment length.
 
-## 9. Who may open a socket to the relay
+## 9. Who is allowed to connect
 
 A WebSocket is exempt from the same-origin policy, so without a check ANY page
 the operator happens to have open could dial the relay and drive the graphic
@@ -167,11 +200,11 @@ real setup and has a supported door:
 
     node relay.js --allow-origin https://your.host
 
-## 10. Query parameters are CLAMPED, not rejected
+## 10. Settings below the minimum are raised, not refused
 
-Three settings have a silent floor. Asking for less does not fail and does not
-warn -- it is quietly raised, so a segment configured below one of these runs
-with a value nobody chose:
+Three settings have a floor. Ask for less and you are given the floor -- no
+error, no warning. So if a setting seems to be ignored, check it against this
+table first:
 
 | parameter | floor | asking for less gives you |
 |---|---|---|

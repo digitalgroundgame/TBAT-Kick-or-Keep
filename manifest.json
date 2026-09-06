@@ -1,28 +1,28 @@
 {
   "files": {
     "EVENTS.md": {
-      "bytes": 8721,
-      "sha256": "325cf2b21fa648d110456a721910c70630da3aa1e981bb7496165bd7d1c75dd7"
+      "bytes": 9854,
+      "sha256": "a131a8de16899df586452b2f660e3fd5761405947b3147c23e4a6854282953a3"
     },
     "README.md": {
-      "bytes": 2511,
-      "sha256": "cb08a1ef58d32e480516a7611364581655c38a31e651d77f9773feb56388e76f"
+      "bytes": 4557,
+      "sha256": "72fbc68d744ad80bf657906904c1ce3a14077504f21bda858fdbd371452d4cda"
     },
     "control-room.html": {
-      "bytes": 20968,
-      "sha256": "19734654874165ae36d206091f268305f61e1476de8670a04a17d61a843a4b02"
+      "bytes": 20490,
+      "sha256": "6e7f2eda639d327d2cfbb2feaac47f51f1f7b212c983b341e20ab1c9f67319b5"
     },
     "overlay.html": {
-      "bytes": 33962,
-      "sha256": "51f439a7f4d303925274f5c0c319721ffa5aa071ef90f2aafba34409489a7de1"
+      "bytes": 32612,
+      "sha256": "00b543caf09834cba0b641480698e47443e1b8f24b6e267b26cc0ddf4777b913"
     },
     "relay.js": {
-      "bytes": 15027,
-      "sha256": "f6c29d0f5ffb2a4e0a95b1726a83053143bdf244f0230f011e73cf6bb04eea3f"
+      "bytes": 14172,
+      "sha256": "6a5bf15880e6ab92b38f1c2f4196147fa389d39ce16047003199ad86f3a7959a"
     }
   },
   "kit": "tugofwar",
-  "source_commit": "b92d5a4a4c6974b03ce7553754c657a94d18a715",
-  "source_date": "2026-09-06T15:28:53-07:00",
-  "version": "2026.09.06.b92d5a4"
+  "source_commit": "761d8c23cb0b8f2179b05a807a4136c4a4295923",
+  "source_date": "2026-09-06T16:10:33-07:00",
+  "version": "2026.09.06.761d8c2"
 }

@@ -1,7 +1,7 @@
 <!--
   TBAT Tug-of-War donation overlay -- a single self-contained OBS browser source.
 
-  THE MECHANIC (confirmed with the show, 2026-08-28):
+  THE MECHANIC:
   - The host sets an initial KICK goal (default $100).
   - Donations carrying "kick" fill the POT toward that goal.
   - Donations carrying "keep" RAISE the goal -- keepers are goalkeepers, and
@@ -18,11 +18,7 @@
 
   WHY ONE FILE. An OBS browser source loads a URL and runs it in a bare
   Chromium. No build step, no server, no npm install: the operator pastes a path
-  or URL and it works, on stream, at 2am, with no developer present. Derrick
-  raised nodecg, which is the right answer for a MULTI-graphic control-room
-  setup and is a real dependency to take on; this reads its state from the same
-  event shape, so it can be wrapped as a nodecg bundle later without rewriting
-  the graphic.
+  or URL and it works, on stream, at 2am, with no developer present.
 
   Never trusts the page it is embedded in: every incoming event is validated,
   amounts are integer cents, and unknown fields are ignored.
@@ -56,11 +52,10 @@
      pale cyan (#4ab8ff) with a two-stop gradient, which reads as generic
      stream-tech and does not sit next to their artwork.
 
-     Old Glory Blue (#002868) is the flier value and is too dark to read as a
+     Old Glory Blue (#002868) is the flier value. It is too dark to read as a
      BAR FILL on a black overlay, so the blue is split: --blue for large flat
-     areas, --blue-ink for type, which sits on black with a white keyline. Do
-     not collapse them -- the type value fails contrast as a fill and the fill
-     value disappears as type. */
+     areas, --blue-ink for type on black. Do not collapse them. The type value
+     fails contrast as a fill, and the fill value disappears as type. */
   :root {
     --red:      #CE1126;   /* flag red */
     --red-ink:  #FF2537;   /* same hue, lifted for type on black */
@@ -247,9 +242,9 @@
      all four rather than deriving two from two. */
   const THEMES = {
     tbat:   { red: "#CE1126", redInk: "#FF2537", blue: "#002868", blueInk: "#3D6DFF" },
-    /* The pre-TBAT palette, kept as a named preset rather than deleted so a
-       swap back is a query param instead of a revert. */
-    aither: { red: "#FF5330", redInk: "#FF6B4A", blue: "#12518A", blueInk: "#4AB8FF" },
+    /* A warmer alternative: orange against a deeper blue. Useful when the
+       segment's own graphics already carry flag red. */
+    warm:   { red: "#FF5330", redInk: "#FF6B4A", blue: "#12518A", blueInk: "#4AB8FF" },
     mono:   { red: "#8A8A8A", redInk: "#D8D8D8", blue: "#2E2E2E", blueInk: "#9A9AA5" },
   };
   const hex6 = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : null);
@@ -343,9 +338,9 @@
   function endHold() {
     state.held = false;
     document.getElementById("splash").hidden = true;
-    // Repaint the timer NOW, not on the next 250ms tick. tick() owns the text,
-    // but leaving visibility to it means the badge is missing for up to a
-    // quarter of a second every time the splash comes down, and shows through
+    // Repaint the timer NOW, not on the next 250ms tick. tick() owns the text.
+    // If it owned visibility too, the badge would be missing for up to a
+    // quarter-second whenever the splash comes down -- and would show through
     // the fresh splash for the same quarter-second after a kick.
     document.getElementById("timer").hidden = false;
   }
@@ -557,35 +552,27 @@
   setInterval(tick, 250); tick();
 
   // ---- inputs ------------------------------------------------------------
-  // 1) postMessage, so a host page (or nodecg bundle) can drive it directly.
-  // The handler is a named function so the control panel can be TESTED through
-  // the same door the overlay opens on the live stream -- and so a nodecg
-  // wrapper can drive it without touching this file.
+  // 1) postMessage, so a page that embeds this overlay can drive it directly.
+  // The handler is a named function so the control room can be tested through
+  // the same door the overlay opens on the live stream, and so another tool can
+  // drive it without touching this file.
   function handleMessage(d, source) {
     if (!d || typeof d !== "object") return;
     if (d.type === "donation") ingest(d.payload ?? d);
-    // "play" and "reset" are the same door: the operator is starting the next
-    // guest. play is the button that clears a held KICKED splash; reset is the
-    // pre-existing "New guest" control. Both reset the board, start the fresh
-    // guest's clock NOW (they are seated), and land buffered donations.
-    // play acts ONLY while held; reset always acts. They are otherwise the same
-    // door, and separating them is what makes a SECOND play harmless. Measured
-    // before this guard: buffering $20 during a hold, then play, put pot at
-    // 2000 -- and a second play reset it to 0, destroying money that had just
-    // landed, unrecoverably, because ingest() had already marked those ids
-    // seen. A double-click reaches that in under a second (the button's own
-    // visibility only refreshes on the 1s snapshot poll), and a duplicated
-    // frame over the relay reaches it with no click at all.
+    // Both mean "the next guest is seated": clear the board, start their
+    // clock now, and land any donations that arrived during the pause.
+    // The one difference is the guard. play acts ONLY while held, so a second
+    // play -- a double-click, or a duplicated frame off the relay -- does
+    // nothing. Without that, the second one would wipe money that had just
+    // landed on the new guest, and it cannot be re-counted: those donation ids
+    // are already spent.
     if (d.type === "play" && state.held) resetGuest();
     if (d.type === "reset") resetGuest();
-    // WHILE HELD, THESE TWO DO NOTHING. Only play/reset end a hold -- the
-    // operator explicitly starting the next guest. Measured on the shipped
-    // script before this guard existed: a "window" while held un-froze the board,
-    // landed the buffered donations on the ALREADY-KICKED guest's still-full
-    // pot, re-armed a pending kick, and counted that same guest as kicked a
-    // SECOND time (kicked 2 -> 3 with the guest counter never moving). Both
-    // also made the splash vanish on a mis-click, which is the exact thing the
-    // hold exists to prevent.
+    // WHILE HELD, THESE TWO DO NOTHING. Ending a hold means the operator has
+    // said the next guest is seated, so only play and reset can do it.
+    // Otherwise a mis-click clears the KICKED message, which is the one thing
+    // the hold exists to prevent. Restarting the window is worse: it puts the
+    // buffered money on the guest who has already gone, and kicks them twice.
     if (d.type === "clear" && !state.held) {              // operator: fresh board,
       state.pot = 0;                                       // SAME guest -- totals
       state.goal = CFG.goal;                               // and window start over,
@@ -598,10 +585,10 @@
       evaluate();                                          // the CURRENT guest (a
       render();                                            // pending kick re-arms at
     }                                                      // the new window's end).
-    // Held means FROZEN: only play/reset act. setgoal is guarded for the same
-    // reason as clear/window -- it would write state.goal and then be silently
-    // overwritten by resetGuest()'s CFG.goal, so the operator would set a goal
-    // during the pause, see it accepted, and watch it vanish when play landed.
+    // Held means FROZEN: only play and reset act. setgoal is guarded for the
+    // same reason. Accepting it here would write a goal that play then quietly
+    // overwrites -- so the operator sets a number, watches it land, and sees it
+    // disappear.
     if (d.type === "setgoal" && !state.held) {            // operator: set the goal
       const g = Number.isFinite(d.goal_cents) ? Math.round(d.goal_cents)
               : Number.isFinite(d.goal)       ? Math.round(d.goal)
@@ -625,25 +612,20 @@
         // timer guess.
         held: state.held,
         guestStart: state.guestStart, now: clock.now(),
-        // The guarantee is CONFIG, and the control room's timer readout
-        // must derive from the same value the overlay enforces -- a
-        // hardcoded twin in the control page silently disagrees the moment
-        // the operator sets a 30s guarantee.
+        // The guarantee is CONFIG. The control room's readout has to come
+        // from the value the overlay enforces; a second copy of it in the
+        // control page disagrees the moment somebody sets 30s.
         guarantee: GUARANTEE_MS,
       } };
       if (source && typeof source.postMessage === "function") {
         source.postMessage(reply, "*");
       } else if (liveWs && liveWs.readyState === 1) {
-        // ANSWER ON THE WIRE THE QUESTION CAME IN ON. A socket message has no
-        // window to post back to (source is null), so this branch used to
-        // drop the request in silence -- and the control room's play button,
-        // which is gated on held, therefore tracked only the PREVIEW iframe,
-        // never the copy that is actually on air. The two diverge for
-        // ordinary reasons: OBS reloads the scene, the relay drops and
-        // reconnects, the operator changes the goal and re-pastes the URL.
-        // When they did, the graphic on air sat under a full-cover KICKED
-        // splash whose only exit is an operator message, while the button
-        // that sends that message was hidden.
+        // ANSWER ON THE WIRE THE QUESTION CAME IN ON. A message that arrived
+        // over the socket has no window to reply to. Without this branch the
+        // control room only ever hears from the preview beside it, never from
+        // the copy on air -- and those two drift apart for ordinary reasons:
+        // OBS reloads the scene, the connection drops, the goal changes
+        // without the URL being re-pasted.
         liveWs.send(JSON.stringify(reply));
       }
     }
@@ -708,7 +690,8 @@
 
   render();
   status("");
-  // Exposed for tests and for a nodecg wrapper; not used by the graphic itself.
+  // Exposed for tests and for a host page that wants to read state; the
+  // graphic itself never uses this.
   window.__tbat = { ingest, sideOf, state, CFG, evaluate, kickNow, resetGuest, clock, handleMessage };
 })();
 </script>

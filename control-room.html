@@ -17,12 +17,11 @@
   relay box here, and every control action (donations included) is broadcast
   to the relay as well as to the local preview.
 
-  THE KIT: everything this page needs to run the show -- overlay, control
-  room, relay, README -- is downloadable as one kit.zip next to these pages,
-  so the operator can run the whole thing off a USB stick with zero connection
-  to the platform. The zip is built by the EMITTER from these same bytes; a
-  zip that disagreed with the pages it ships would be the drift this file
-  exists to prevent.
+  THE KIT: everything needed to run the show -- overlay, control room, relay
+  and README -- downloads as one kit.zip next to these pages. The whole thing
+  then runs off a USB stick with no connection to anything. The zip is built
+  from these same bytes, so what you download and what you see here cannot
+  disagree.
 -->
 <!doctype html>
 <meta charset="utf-8">
@@ -140,7 +139,7 @@
     <button class="r" data-side="keep" data-amt="5">+$5 keep</button>
     <button class="r" data-side="keep" data-amt="25">+$25 keep</button>
     <button class="r" data-side="keep" data-amt="250">+$250 keep</button>
-    <button class="ghost" id="ambiguous">$50 "kick or keep?"</button>
+    <button class="ghost" id="ambiguous" title="A donation naming both words is not a vote -- the bar must not move">$50 saying both words</button>
   </div>
 
   <div class="row">
@@ -149,7 +148,7 @@
     <button class="ghost" id="newguest">New guest</button>
     <input id="goalAmt" type="number" min="1" placeholder="goal $" value="100">
     <button class="ghost" id="setgoal">Set goal</button>
-    <button class="ghost" id="demo">Auto feed</button>
+    <button class="ghost" id="demo" title="Fills the board with invented donations so you can see it run">Fake donations (testing)</button>
   </div>
 
   <div class="row">
@@ -162,11 +161,11 @@
   </div>
 
   <fieldset>
-    <legend>Segment settings — rebuilds the preview, exactly as OBS would load it</legend>
+    <legend>Segment settings — Apply reloads the preview the way OBS will load it</legend>
     <div class="row">
       <label>Kick goal $ <input id="cfgGoal" type="number" min="1" value="100"></label>
-      <label>Guarantee s <input id="cfgGuarantee" type="number" min="10" value="120"></label>
-      <label>Pop $ <input id="cfgBig" type="number" min="1" value="25"></label>
+      <label title="However fast the money comes in, the guest cannot be kicked before this is up">Safe on air, seconds <input id="cfgGuarantee" type="number" min="10" value="120"></label>
+      <label title="A donation this size or larger flashes its amount on screen">Big donation, $ <input id="cfgBig" type="number" min="1" value="25"></label>
       <button class="ghost" id="applyCfg">Apply</button>
     </div>
   </fieldset>
@@ -178,12 +177,13 @@
       <button id="copyObs">Copy</button>
     </div>
     <div class="row">
-      <label>Relay ws:// (optional — drives the OBS copy too)
+      <label title="Without this, these buttons change the preview above but not OBS">
+        Connect this page to OBS
         <input id="relay" type="text" placeholder="ws://localhost:8787" style="width:260px;"></label>
       <span id="relayState" style="font-size:13px;opacity:.8;"></span>
-      <a href="relay.js" download style="font-size:13px;">Get the relay (relay.js)</a>
+      <a href="relay.js" download style="font-size:13px;">Download relay.js</a>
       <span style="opacity:.45;">·</span>
-      <a href="kit.zip" download style="font-size:13px;">Download the whole kit (kit.zip — runs with no platform)</a>
+      <a href="kit.zip" download style="font-size:13px;">Download the whole kit — runs offline</a>
     </div>
   </fieldset>
 
@@ -215,18 +215,16 @@
     // a dropped send looks exactly like a working one: the operator sees the
     // bar move here and nothing move on air, and concludes the overlay is
     // broken. This is the only moment that distinction is knowable.
-    relayStatus("relay: NOT SENT (" + (relay ? "still connecting" : "disconnected")
-                + ") -- OBS did not get that");
+    relayStatus(relay
+      ? "Still connecting -- OBS did not get that. Try again in a moment."
+      : "Not connected -- OBS did not get that. Check the relay box.");
   }
   const relayInput = document.getElementById("relay");
-  // RECONNECT, and SAY SO. The overlay's own ?ws= side already reconnects every
-  // 3s; this side did not, and that asymmetry became dangerous the moment the
-  // KICKED splash stopped self-hiding: the splash's ONLY exit is an operator
-  // message, so a dropped relay leaves the OBS copy under a full-cover splash
-  // indefinitely while this page still looks perfectly fine. A silent
-  // readyState check was the whole failure -- broadcast() just skipped the
-  // send. The status line makes the dead socket visible, because an operator
-  // pressing play and seeing nothing happen needs to know WHY.
+  // RECONNECT, AND SAY SO. The KICKED message only comes down when the
+  // operator presses a button, so if this connection is dead the graphic on
+  // air stays under a full-cover splash while this page looks perfectly fine.
+  // Reconnecting is half the answer; the other half is the status line, because
+  // an operator pressing play and seeing nothing happen needs to know why.
   let relayWant = "";
   let relayTimer = null;
   const relayStatus = (t) => {
@@ -238,22 +236,16 @@
     if (relay) { try { relay.close(); } catch {} relay = null; }
     if (!relayWant) { relayStatus(""); return; }
     let ws;
-    try { ws = new WebSocket(relayWant); } catch { relayStatus("relay: bad url"); return; }
+    try { ws = new WebSocket(relayWant); } catch { relayStatus("That address is not valid"); return; }
     relay = ws;
-    relayStatus("relay: connecting");
-    // EVERY handler below checks that this is STILL the current socket, and
-    // that check is the whole fix for a defect that made the buttons drop
-    // messages every few seconds while the status line read "connected".
-    //
-    // close() is asynchronous. connectRelay() closes the old socket and
-    // immediately installs a new one, so the OLD socket's onclose fires
-    // afterwards -- and it used to set relay = null unconditionally, throwing
-    // away the socket that had just replaced it, then schedule ANOTHER
-    // reconnect 3s later, which closed the next live socket in turn. A
-    // self-feeding loop: measured in a real browser, the third and fourth
-    // button presses of a session were silently dropped (readyState 0, then
-    // relay null) with both ends reporting "connected".
-    ws.onopen  = () => { if (relay === ws) relayStatus("relay: connected"); };
+    relayStatus("Connecting...");
+    // EVERY handler below checks this is STILL the current socket.
+    // close() is asynchronous, so when we replace a socket the old one's
+    // handlers still fire afterwards. Unguarded, the old socket's onclose
+    // throws away the socket that just replaced it and schedules another
+    // reconnect -- which then closes the next live one, and so on. The page
+    // keeps saying "connected" while presses quietly go nowhere.
+    ws.onopen  = () => { if (relay === ws) relayStatus("Connected to OBS"); };
     // The OBS copy answers the snapshot poll down this socket. That reply is
     // the only way this page can know what the graphic ON AIR is doing --
     // everything else it renders comes from the preview iframe, which is a
@@ -264,11 +256,11 @@
       try { d = JSON.parse(m.data); } catch { return; }
       if (d && d.type === "snapshot" && d.payload) applySnapshot(d.payload, true);
     };
-    ws.onerror = () => { if (relay === ws) relayStatus("relay: error"); };
+    ws.onerror = () => { if (relay === ws) relayStatus("Could not connect -- is relay.js running?"); };
     ws.onclose = () => {
       if (relay !== ws) return;   // a socket we already replaced: not news
       relay = null;
-      relayStatus("relay: DISCONNECTED -- OBS is not following these buttons");
+      relayStatus("DISCONNECTED -- OBS is not following these buttons. Retrying...");
       // Keep trying: the rig's relay is usually restarted mid-show, not gone.
       relayTimer = setTimeout(connectRelay, 3000);
     };
@@ -347,12 +339,9 @@
     return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }
   // WHICH OVERLAY IS THE AUTHORITY. Two copies answer this page: the preview
-  // iframe (postMessage) and the copy in OBS (over the relay). They are NOT
-  // interchangeable — the one on air is the one that matters, and they diverge
-  // for ordinary reasons: OBS reloads the scene, the relay drops and
-  // reconnects, the operator changes the goal and does not re-paste the URL.
-  // While the on-air copy is answering, it wins and the preview is ignored;
-  // if it stops answering, this falls back to the preview within 4s rather
+  // beside it, and the one in OBS. They are not interchangeable — the one on
+  // air is the one that matters. So while the on-air copy is answering it
+  // wins, and if it goes quiet this falls back to the preview after 4s rather
   // than freezing on a stale reading.
   let lastOnAir = 0;
   function applySnapshot(p, onAir) {
@@ -404,8 +393,8 @@
   refreshObs();
 </script>
 <script>
-  // Version badge from manifest.json (written beside this page by the emitter).
-  // A screenshot of the control room then names the build. Silent when absent.
+  // Version badge, read from the manifest.json beside this page, so a
+  // screenshot of the control room names the build. Silent when absent.
   (function () {
     fetch("manifest.json", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((m) => {
       if (!m || !m.version) return;
