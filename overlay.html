@@ -1,0 +1,684 @@
+<!--
+  TBAT Tug-of-War donation overlay -- a single self-contained OBS browser source.
+
+  THE MECHANIC (confirmed with the show, 2026-08-28):
+  - The host sets an initial KICK goal (default $100).
+  - Donations carrying "kick" fill the POT toward that goal.
+  - Donations carrying "keep" RAISE the goal -- keepers are goalkeepers, and
+    the two forces tug: kick pulls the line right, keep pushes it back.
+  - When the pot meets the goal the guest is KICKED -- but every guest is
+    guaranteed a minimum airtime (default 2 minutes). If the goal is met during
+    the guarantee, the kick is PENDING: the timer counts it down and keep
+    donations can still raise the goal and SAVE the guest.
+  - Kicks are favoured on purpose (cycle people through the show): the kick
+    splash HOLDS until the operator presses play in the control room -- the
+    next contestant needs to sit down before their clock starts. Donations
+    that arrive while the splash is up are buffered and count on the next
+    guest's board when play is pressed (never lost, never started early).
+
+  WHY ONE FILE. An OBS browser source loads a URL and runs it in a bare
+  Chromium. No build step, no server, no npm install: the operator pastes a path
+  or URL and it works, on stream, at 2am, with no developer present. Derrick
+  raised nodecg, which is the right answer for a MULTI-graphic control-room
+  setup and is a real dependency to take on; this reads its state from the same
+  event shape, so it can be wrapped as a nodecg bundle later without rewriting
+  the graphic.
+
+  Never trusts the page it is embedded in: every incoming event is validated,
+  amounts are integer cents, and unknown fields are ignored.
+
+  Query parameters (all optional):
+    ?demo=1              synthesise donations so it can be shown with no feed
+    &goal=10000          initial KICK goal in cents (default 10000 = $100)
+    &guarantee=120       guaranteed airtime in seconds (default 120 = 2 min)
+    &big=2500            cents at/above which a donation pops (default 2500 = $25)
+    &left=kick&right=keep    the two keywords
+    &ws=wss://host/path  a WebSocket emitting the event shape below
+    &poll=https://host/x  polled every 5s, returns {events:[...]}
+-->
+<meta charset="utf-8">
+<title>TBAT Tug of War</title>
+<style>
+  /* Transparent by design: OBS composites this over the scene. */
+  /* color-scheme MATTERS here and is not cosmetic. A transparent html/body is
+     not sufficient: the browser still paints the frame's BASE CANVAS, and under
+     the default light scheme that base is WHITE. Measured in a real Chromium on
+     the published page -- html and body both computed rgba(0,0,0,0) while the
+     embedding surface rendered a solid white card, and declaring the dark scheme
+     made the backdrop show through. Every computed style said transparent while
+     the pixels said white, so only looking at it found this.
+     NOTE: no backticks in this file -- it lives inside a TS template literal. */
+  html, body { margin: 0; padding: 0; background: transparent; color-scheme: dark; overflow: hidden; }
+
+  /* TBAT FLIER PALETTE. Their social fliers are four colours and no gradients:
+     flag red, Old Glory blue, white, black -- heavy uppercase, hard edges,
+     white keylines. The overlay previously used a warm orange (#ff6b4a) and a
+     pale cyan (#4ab8ff) with a two-stop gradient, which reads as generic
+     stream-tech and does not sit next to their artwork.
+
+     Old Glory Blue (#002868) is the flier value and is too dark to read as a
+     BAR FILL on a black overlay, so the blue is split: --blue for large flat
+     areas, --blue-ink for type, which sits on black with a white keyline. Do
+     not collapse them -- the type value fails contrast as a fill and the fill
+     value disappears as type. */
+  :root {
+    --red:      #CE1126;   /* flag red */
+    --red-ink:  #FF2537;   /* same hue, lifted for type on black */
+    --blue:     #002868;   /* Old Glory blue */
+    --blue-ink: #3D6DFF;   /* lifted for type on black */
+    --ink:      #000;
+    --paper:    #fff;
+  }
+  body {
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: var(--paper);
+  }
+  #wrap { position: relative; width: 100vw; padding: 18px 24px 0; box-sizing: border-box; }
+
+  .heads { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+  .side { display: flex; flex-direction: column; line-height: 1; }
+  .side.right { align-items: flex-end; }
+  .label {
+    font-size: 34px; font-weight: 900; letter-spacing: -.01em; text-transform: uppercase;
+    /* A hard black keyline, not a soft drop shadow. Flier type is cut out of
+       the background rather than floating above it, and a blurred shadow is
+       the single biggest tell that this is a stream widget and not artwork. */
+    -webkit-text-stroke: 2px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 2px 0 var(--ink);
+  }
+  .total {
+    font-size: 26px; font-weight: 900; letter-spacing: -.02em; opacity: 1;
+    color: var(--paper);
+    -webkit-text-stroke: 2px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 2px 0 var(--ink);
+  }
+  .l { color: var(--red-ink); }
+  .r { color: var(--blue-ink); }
+
+  /* The bar. The RED fill is the kick pot's progress toward the goal; the blue
+     field behind it is the gap that remains. The white knot rides the fill's
+     leading edge -- kick donations push it right, keep donations (which raise
+     the goal) push it back left. When it reaches the right edge the fill is
+     full, the bar pulses, and the guest is gone. A single fill whose width IS
+     the ratio, so there is no way for the two halves to disagree about the
+     score. */
+  #bar {
+    /* Square, not a pill, and a solid white keyline rather than a translucent
+       inset -- the flier vocabulary is blocks and rules. */
+    position: relative; height: 38px; border-radius: 0; overflow: hidden;
+    background: var(--blue);
+    border: 3px solid var(--paper);
+    box-shadow: 0 4px 0 var(--ink);
+  }
+  #bar.pending { animation: pulse 0.8s infinite; }
+  #fill {
+    position: absolute; inset: 0 auto 0 0; width: 0%;
+    background: var(--red);
+    transition: width .8s cubic-bezier(.22,.61,.36,1);
+  }
+  /* Centre rope marker -- where the line currently stands. */
+  #knot {
+    position: absolute; top: -5px; bottom: -5px; width: 6px; left: 0%;
+    margin-left: -3px; background: var(--paper); border-radius: 0;
+    box-shadow: 0 0 0 2px var(--ink);
+    transition: left .8s cubic-bezier(.22,.61,.36,1);
+  }
+
+  .footer { display: flex; justify-content: center; margin-top: 10px; }
+  #timer {
+    font-size: 22px; font-weight: 900; letter-spacing: .06em;
+    padding: 6px 18px; border-radius: 0;
+    background: var(--ink); border: 3px solid var(--paper);
+    text-shadow: none;
+  }
+  /* Window about to open, or a kick pending: the moment is near, pulse it. */
+  #timer.soon, #timer.kick { background: var(--red); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+
+  /* Big-donation pops. Positioned per side, animated out and removed. */
+  .pop {
+    position: absolute; top: 78px; font-size: 50px; font-weight: 900;
+    letter-spacing: -.02em;
+    -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill;
+    text-shadow: 0 3px 0 var(--ink); pointer-events: none;
+    animation: rise 2.6s ease-out forwards;
+  }
+  .pop.left  { left: 24px; }
+  .pop.right { right: 24px; }
+  @keyframes rise {
+    0%   { opacity: 0; transform: translateY(14px) scale(.7); }
+    16%  { opacity: 1; transform: translateY(0)    scale(1.12); }
+    28%  { transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-58px) scale(1); }
+  }
+
+  /* The kick moment. Covers the widget from the kick until the operator
+     presses play: the KICKED message HOLDS so the next contestant can sit
+     down before their clock starts -- it must not scroll itself away. */
+  #splash {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; background: rgba(0,0,0,.82);
+  }
+  #splash[hidden] { display: none; }
+  .splash-title {
+    font-size: 96px; font-weight: 900; letter-spacing: -.02em; line-height: 1;
+    color: var(--red-ink); text-transform: uppercase;
+    -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill;
+    text-shadow: 0 4px 0 var(--ink);
+  }
+  .splash-sub {
+    font-size: 26px; font-weight: 800; letter-spacing: .02em;
+    color: var(--paper);
+    -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill;
+  }
+  /* The third splash line: who is up next. Type on the KICKED screen, so it
+     uses the lifted ink rules like .splash-sub but smaller. */
+  .splash-wait {
+    font-size: 17px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--paper); opacity: .92;
+    -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill;
+  }
+
+  /* A pending kick averted by keep: the goalkeepers saved the guest. */
+  #saved {
+    position: absolute; top: 150px; left: 50%; transform: translateX(-50%);
+    font-size: 34px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--ink); background: var(--paper); border: 3px solid var(--ink);
+    padding: 8px 22px; z-index: 11; animation: saved-pop 1.5s ease-out forwards;
+  }
+  #saved[hidden] { display: none; }
+  @keyframes saved-pop {
+    0%   { opacity: 0; transform: translateX(-50%) scale(.8); }
+    18%  { opacity: 1; transform: translateX(-50%) scale(1.08); }
+    30%  { transform: translateX(-50%) scale(1); }
+    100% { opacity: 0; transform: translateX(-50%) scale(1); }
+  }
+
+  #status { position: absolute; top: 4px; right: 24px; font-size: 12px; opacity: .5; }
+</style>
+
+<div id="wrap">
+  <div class="heads">
+    <div class="side left">
+      <span class="label l" id="lLabel">KICK</span>
+      <span class="total l" id="lTotal">$0</span>
+    </div>
+    <div class="side right">
+      <span class="label r" id="rLabel">KEEP</span>
+      <span class="total r" id="rTotal">GOAL $100</span>
+    </div>
+  </div>
+  <div id="bar"><div id="fill"></div><div id="knot"></div></div>
+  <div class="footer"><span id="timer">WINDOW 2:00</span></div>
+  <span id="status"></span>
+  <div id="splash" hidden></div>
+  <div id="saved" hidden></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const qs = new URLSearchParams(location.search);
+  const CFG = {
+    left:      (qs.get("left")  || "kick").toLowerCase(),
+    right:     (qs.get("right") || "keep").toLowerCase(),
+    goal:      Math.max(100, parseInt(qs.get("goal") || "10000", 10) || 10000),
+    guarantee: Math.max(10, parseInt(qs.get("guarantee") || "120", 10) || 120),
+    big:       Math.max(1, parseInt(qs.get("big") || "2500", 10) || 2500),
+    demo:      qs.get("demo") === "1",
+  };
+  /* THEME -- swappable per org, no rebuild.
+     The palette ships as TBAT's flier colours because that is who runs it
+     today, but the overlay is a product and the next org will not be red/blue.
+     A preset covers the common case (?theme=tbat) and four hex overrides cover
+     the rest (?red=%23CE1126&blue=%23002868&red-ink=...&blue-ink=...).
+
+     Values are validated as #rrggbb and DISCARDED otherwise. That is not
+     tidiness: these land in setProperty, so an unvalidated value from the query
+     string is a CSS injection into a page anyone can hand someone a link to.
+
+     --red/--blue are large flat areas; --red-ink/--blue-ink are the same hues
+     lifted for TYPE on black. They are separate on purpose -- Old Glory blue
+     (#002868) is unreadable as type on this overlay -- so a preset must give
+     all four rather than deriving two from two. */
+  const THEMES = {
+    tbat:   { red: "#CE1126", redInk: "#FF2537", blue: "#002868", blueInk: "#3D6DFF" },
+    /* The pre-TBAT palette, kept as a named preset rather than deleted so a
+       swap back is a query param instead of a revert. */
+    aither: { red: "#FF5330", redInk: "#FF6B4A", blue: "#12518A", blueInk: "#4AB8FF" },
+    mono:   { red: "#8A8A8A", redInk: "#D8D8D8", blue: "#2E2E2E", blueInk: "#9A9AA5" },
+  };
+  const hex6 = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : null);
+  const theme = Object.assign({}, THEMES[(qs.get("theme") || "tbat").toLowerCase()] || THEMES.tbat);
+  [["red", "red"], ["redInk", "red-ink"], ["blue", "blue"], ["blueInk", "blue-ink"]]
+    .forEach(([key, param]) => { const v = hex6(qs.get(param)); if (v) theme[key] = v; });
+  try {
+    const rs = document.documentElement.style;
+    rs.setProperty("--red", theme.red);
+    rs.setProperty("--red-ink", theme.redInk);
+    rs.setProperty("--blue", theme.blue);
+    rs.setProperty("--blue-ink", theme.blueInk);
+  } catch (_e) { /* no CSSOM (test harness) -- the stylesheet defaults stand */ }
+
+  document.getElementById("lLabel").textContent = CFG.left.toUpperCase();
+  document.getElementById("rLabel").textContent = CFG.right.toUpperCase();
+
+  // The clock is a mutable holder so tests can freeze time; production never
+  // rebinds it.
+  const clock = { now: () => Date.now() };
+
+  // All amounts are integer CENTS. Floats drift, and a tug-of-war whose score
+  // is 0.1+0.2 away from the truth is the kind of bug nobody finds on stream.
+  const GUARANTEE_MS = CFG.guarantee * 1000;
+  const state = {
+    pot: 0,                 // kick cents raised toward the goal
+    goal: CFG.goal,         // the threshold; keep donations raise it
+    guestStart: clock.now(), // when the current guest came on
+    kickPending: null,       // ms timestamp when a pending kick fires, or null
+    guest: 1,                // guests cycled through (kick or manual reset)
+    kicked: 0,               // guests actually kicked
+    seen: new Set(),
+    held: false,             // post-kick pause: the KICKED splash is up and
+                             // nothing advances until the operator presses play
+  };
+  // Donations that arrive while held. They are not lost and do not start the
+  // NEXT guest early -- they land on the fresh board when play is pressed.
+  let heldQueue = [];
+
+  const money = (cents) => {
+    const d = cents / 100;
+    return "$" + d.toLocaleString("en-US", {
+      minimumFractionDigits: d % 1 ? 2 : 0, maximumFractionDigits: 2,
+    });
+  };
+
+  // Word-boundary match, so "kickoff" and "keepsake" do NOT score. A donor who
+  // typed a real word should not be dragged onto a side they did not pick, and
+  // a substring match is how that happens.
+  const sideOf = (text) => {
+    const t = String(text || "").toLowerCase();
+    const hit = (w) => new RegExp("(^|[^a-z0-9])" + w + "([^a-z0-9]|$)", "i").test(t);
+    const l = hit(CFG.left), r = hit(CFG.right);
+    if (l && !r) return "left";
+    if (r && !l) return "right";
+    return null;   // neither, or BOTH -- ambiguous is not a vote
+  };
+
+  function render() {
+    // The fill IS the ratio: kick money over the current goal. Keep donations
+    // shrink it (the goal grew); kick donations grow it. Cap at 100 -- a pot
+    // past the goal is a pending kick, not an overflowing bar.
+    const pct = state.goal > 0 ? Math.min(100, (state.pot / state.goal) * 100) : 100;
+    document.getElementById("fill").style.width = pct + "%";
+    document.getElementById("knot").style.left = pct + "%";
+    document.getElementById("lTotal").textContent = money(state.pot);
+    document.getElementById("rTotal").textContent = "GOAL " + money(state.goal);
+    document.getElementById("bar").classList.toggle("pending", !!state.kickPending);
+  }
+
+  function pop(side, cents) {
+    const el = document.createElement("div");
+    /* Carry the SAME .l/.r class the labels use, so the pop colour is defined
+       in exactly one place. The first version of this set el.style.color from
+       getComputedStyle -- which reintroduced the hardcoded pair one layer down
+       AND used a DOM API the test harness does not stub, so it threw on the
+       first big donation. A class needs no runtime lookup and cannot drift. */
+    el.className = "pop " + side + " " + (side === "left" ? "l" : "r");
+    el.textContent = money(cents);
+    document.getElementById("wrap").appendChild(el);
+    setTimeout(() => el.remove(), 2800);
+  }
+
+  /** Leave the held state: the KICKED splash comes down. Every operator path
+      that moves the show on goes through here (play/reset/clear/window), so a
+      splash can never survive an operator action -- and never needs a timer. */
+  function endHold() {
+    state.held = false;
+    document.getElementById("splash").hidden = true;
+  }
+
+  /** A fresh guest: pot back to zero, goal back to the base, guarantee
+      restarts. ALSO the operator's "play": it clears any held KICKED splash
+      and lands donations that arrived during the hold on the fresh board --
+      the next contestant's clock starts NOW, when they are seated, never at
+      the moment of the kick. */
+  function resetGuest() {
+    endHold();
+    state.pot = 0;
+    state.goal = CFG.goal;
+    state.guestStart = clock.now();
+    state.kickPending = null;
+    state.guest += 1;
+    render();
+    flushHeld();
+  }
+
+  /** The kick itself. The KICKED splash goes up and the board HOLDS: no reset,
+      no next-guest clock, until the operator presses play in the control room
+      (the next contestant has to sit down first -- the show does not move on
+      without them). Donations that arrive while the splash is up are buffered
+      and count on the NEXT guest's board. */
+  function kickNow() {
+    const raised = state.pot;
+    state.kicked += 1;
+    state.kickPending = null;
+    state.held = true;
+    splash("KICKED!",
+           money(raised) + " raised to kick",
+           "guest " + (state.guest + 1) + " next");
+    render();
+  }
+
+  /**
+   * The mechanic's heart. Called after every donation and every timer tick:
+   * - a pending kick that no longer has the pot at/over the goal is SAVED
+   *   (a keep donation raised the goal past it);
+   * - the pot meeting the goal before the guarantee ends becomes PENDING --
+   *   the guest is guaranteed their airtime, and the countdown is the drama;
+   * - the pot meeting the goal after the guarantee is an immediate kick.
+   */
+  function evaluate() {
+    const now = clock.now();
+    if (state.held) return;   // post-kick pause: nothing may fire until play
+    if (state.kickPending) {
+      if (now >= state.kickPending) { kickNow(); return; }
+      if (state.pot >= state.goal) return;      // still pending
+      state.kickPending = null;                  // goalkeepers saved them
+      flashSaved();
+      render();
+    } else if (state.pot >= state.goal) {
+      if (now < state.guestStart + GUARANTEE_MS) {
+        state.kickPending = state.guestStart + GUARANTEE_MS;
+        render();
+      } else {
+        kickNow();
+      }
+    }
+  }
+
+  /**
+   * Derive what a donation VOTES: { cents, side }, or null when it is not a
+   * vote (bad amount, or no single keyword -- still a donation, not a vote).
+   * The one place amounts and keywords are read; every scoring path below
+   * resolves through here so they cannot disagree about a donor's money.
+   */
+  function resolve(ev) {
+    const cents = Number.isFinite(ev.amount_cents) ? Math.round(ev.amount_cents)
+                : Number.isFinite(ev.amount)       ? Math.round(ev.amount * 100)
+                : NaN;
+    if (!Number.isFinite(cents) || cents <= 0) return null;
+    const side = sideOf(ev.message ?? ev.comment ?? ev.note ?? "");
+    if (!side) return null;
+    return { cents, side };
+  }
+
+  /**
+   * Put one resolved donation on the board: move the pot or the goal, render,
+   * pop if it is big, and re-evaluate the kick mechanic. Callers guarantee the
+   * board is live (not held) -- flushHeld is the only path that replays, and
+   * it runs after the hold has ended.
+   */
+  function applyDonation(ev) {
+    const r = resolve(ev);
+    if (!r) return;
+    if (r.side === "left") state.pot += r.cents;   // kick: fill the pot
+    else state.goal += r.cents;                    // keep: raise the goal
+
+    render();
+    if (r.cents >= CFG.big) pop(r.side, r.cents);
+    evaluate();
+  }
+
+  /** Land donations that arrived during the hold on the fresh board. Called
+      from resetGuest() and the other operator paths that end a hold -- the
+      same action that starts the next guest -- so buffered money is never
+      lost and never lands early. */
+  function flushHeld() {
+    const q = heldQueue;
+    heldQueue = [];
+    for (const ev of q) {
+      // The id was already seen (ingest marks on arrival), so these go
+      // straight to the scoring path -- replaying through ingest() would
+      // silently drop every one as a duplicate.
+      applyDonation(ev);
+    }
+  }
+
+  /**
+   * Accept one donation event.
+   *   { id?, amount_cents | amount, message | comment | note }
+   * `amount` is accepted as DOLLARS for convenience and converted; amount_cents
+   * always wins when both are present.
+   * Returns true when it SCORED. A donation buffered by the hold returns false
+   * (it will score when play is pressed) -- "not yet" is not "ignored".
+   */
+  function ingest(ev) {
+    if (!ev || typeof ev !== "object") return false;
+    // Idempotent by id: a reconnecting socket or an overlapping poll will
+    // re-deliver, and double-counting a $500 donation is unrecoverable on air.
+    const id = ev.id != null ? String(ev.id) : null;
+    if (id) { if (state.seen.has(id)) return false; state.seen.add(id); }
+
+    if (!resolve(ev)) return false;   // not a vote: rejected, not buffered
+    if (state.held) { heldQueue.push(ev); return false; }
+    applyDonation(ev);                // one scoring path, for live and flush
+    return true;
+  }
+
+  // ---- kick / saved presentation -------------------------------------------
+  // The kick splash has NO auto-hide: it stays until the operator presses play
+  // (endHold sets splash.hidden = true), which is the whole point of the hold
+  // -- the show must not move on before the next contestant is seated.
+  let savedTimer = null;
+  function splash(title, sub, wait) {
+    const el = document.getElementById("splash");
+    el.textContent = "";
+    const t = document.createElement("div");
+    t.className = "splash-title";
+    t.textContent = title;
+    const s = document.createElement("div");
+    s.className = "splash-sub";
+    s.textContent = sub;
+    el.appendChild(t);
+    el.appendChild(s);
+    if (wait) {
+      const w = document.createElement("div");
+      w.className = "splash-wait";
+      w.textContent = wait;
+      el.appendChild(w);
+    }
+    el.hidden = false;
+  }
+  function flashSaved() {
+    const el = document.getElementById("saved");
+    el.hidden = false;
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => { el.hidden = true; }, 1500);
+  }
+
+  // ---- timer ---------------------------------------------------------------
+  // Three modes, each the answer to "when is the next decision point?":
+  //   WINDOW m:ss  -- countdown of the guest's guaranteed airtime; when it
+  //                   reaches zero the kick window is open.
+  //   KICK m:ss    -- a kick is PENDING; this counts down to the moment the
+  //                   guest is gone, and keep can still save them.
+  //   ON AIR m:ss  -- the window is open and nothing is pending; this is how
+  //                   long the guest has survived.
+  function mmss(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+  function tick() {
+    const now = clock.now();
+    const el = document.getElementById("timer");
+    if (state.held) {
+      // Between guests: nothing is counting -- the next contestant's clock
+      // starts when the operator presses play.
+      // HIDE it, do not just relabel it. The splash is rgba(0,0,0,.82), NOT
+      // opaque, so a relabelled badge SHOWS THROUGH and lands on top of the
+      // splash's own "guest N next" line -- two overlapping strings, on air.
+      // An earlier comment here asserted it was "hidden behind the splash";
+      // a screenshot of the real page disproved that.
+      el.textContent = "NEXT GUEST";
+      el.className = "";
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    if (state.kickPending) {
+      if (now >= state.kickPending) { kickNow(); return; }
+      el.textContent = "KICK " + mmss((state.kickPending - now) / 1000);
+      el.className = "kick";
+      return;
+    }
+    const end = state.guestStart + GUARANTEE_MS;
+    if (now < end) {
+      el.textContent = "WINDOW " + mmss((end - now) / 1000);
+      el.className = (end - now <= 30000) ? "soon" : "";
+    } else {
+      el.textContent = "ON AIR " + mmss((now - state.guestStart) / 1000);
+      el.className = "";
+    }
+  }
+  setInterval(tick, 250); tick();
+
+  // ---- inputs ------------------------------------------------------------
+  // 1) postMessage, so a host page (or nodecg bundle) can drive it directly.
+  // The handler is a named function so the control panel can be TESTED through
+  // the same door the overlay opens on the live stream -- and so a nodecg
+  // wrapper can drive it without touching this file.
+  function handleMessage(d, source) {
+    if (!d || typeof d !== "object") return;
+    if (d.type === "donation") ingest(d.payload ?? d);
+    // "play" and "reset" are the same door: the operator is starting the next
+    // guest. play is the button that clears a held KICKED splash; reset is the
+    // pre-existing "New guest" control. Both reset the board, start the fresh
+    // guest's clock NOW (they are seated), and land buffered donations.
+    // play acts ONLY while held; reset always acts. They are otherwise the same
+    // door, and separating them is what makes a SECOND play harmless. Measured
+    // before this guard: buffering $20 during a hold, then play, put pot at
+    // 2000 -- and a second play reset it to 0, destroying money that had just
+    // landed, unrecoverably, because ingest() had already marked those ids
+    // seen. A double-click reaches that in under a second (the button's own
+    // visibility only refreshes on the 1s snapshot poll), and a duplicated
+    // frame over the relay reaches it with no click at all.
+    if (d.type === "play" && state.held) resetGuest();
+    if (d.type === "reset") resetGuest();
+    // WHILE HELD, THESE TWO DO NOTHING. Only play/reset end a hold -- the
+    // operator explicitly starting the next guest. Measured on the shipped
+    // script before this guard existed: a "window" while held un-froze the board,
+    // landed the buffered donations on the ALREADY-KICKED guest's still-full
+    // pot, re-armed a pending kick, and counted that same guest as kicked a
+    // SECOND time (kicked 2 -> 3 with the guest counter never moving). Both
+    // also made the splash vanish on a mis-click, which is the exact thing the
+    // hold exists to prevent.
+    if (d.type === "clear" && !state.held) {              // operator: fresh board,
+      state.pot = 0;                                       // SAME guest -- totals
+      state.goal = CFG.goal;                               // and window start over,
+      state.guestStart = clock.now();                      // the guest counter does
+      state.kickPending = null;                            // not move.
+      render();
+    }
+    if (d.type === "window" && !state.held) {             // operator: restart the
+      state.guestStart = clock.now();                      // guaranteed airtime for
+      evaluate();                                          // the CURRENT guest (a
+      render();                                            // pending kick re-arms at
+    }                                                      // the new window's end).
+    // Held means FROZEN: only play/reset act. setgoal is guarded for the same
+    // reason as clear/window -- it would write state.goal and then be silently
+    // overwritten by resetGuest()'s CFG.goal, so the operator would set a goal
+    // during the pause, see it accepted, and watch it vanish when play landed.
+    if (d.type === "setgoal" && !state.held) {            // operator: set the goal
+      const g = Number.isFinite(d.goal_cents) ? Math.round(d.goal_cents)
+              : Number.isFinite(d.goal)       ? Math.round(d.goal)
+              : NaN;
+      if (Number.isFinite(g) && g > 0) {
+        state.goal = g;
+        evaluate();                                        // may cancel a pending kick
+        render();
+      }
+    }
+    if (d.type === "snapshot") {                          // control panel: a live
+      if (source && typeof source.postMessage === "function") {
+        source.postMessage({ type: "snapshot", payload: {
+          pot: state.pot, goal: state.goal,
+          guest: state.guest, kicked: state.kicked,
+          kickPending: state.kickPending,
+          // held: the KICKED splash is up and the board is frozen -- the
+          // control room shows its play button off this flag, never off a
+          // timer guess.
+          held: state.held,
+          guestStart: state.guestStart, now: clock.now(),
+          // The guarantee is CONFIG, and the control room's timer readout
+          // must derive from the same value the overlay enforces -- a
+          // hardcoded twin in the control page silently disagrees the moment
+          // the operator sets a 30s guarantee.
+          guarantee: GUARANTEE_MS,
+        } }, "*");
+      }
+    }
+  }
+  addEventListener("message", (e) => handleMessage(e.data, e.source));
+
+  // 2) WebSocket, 3) polling. Both optional; failures are shown, never silent.
+  const status = (t) => {
+    const counters = "guest " + state.guest + " · kicked " + state.kicked;
+    document.getElementById("status").textContent = t ? counters + " · " + t : counters;
+  };
+  const wsUrl = qs.get("ws");
+  if (wsUrl) {
+    (function connect() {
+      let ws;
+      try { ws = new WebSocket(wsUrl); } catch { status("ws: bad url"); return; }
+      ws.onopen    = () => status("");
+      // handleMessage, NOT ingest: ingest() takes a donation, while
+      // handleMessage() dispatches reset/clear/window/setgoal too. Routing the
+      // socket at ingest silently DROPPED every operator control on the OBS
+      // copy -- the one thing the relay exists to carry. The postMessage path
+      // above has always used handleMessage; these two disagreed.
+      // A null source: a socket message comes from no window.
+      ws.onmessage = (m) => { try { handleMessage(JSON.parse(m.data), null); } catch {} };
+      // Reconnect: a stream runs for hours and a socket WILL drop. Silent
+      // disconnection would freeze the bar while looking perfectly fine.
+      ws.onclose   = () => { status("ws: reconnecting"); setTimeout(connect, 3000); };
+      ws.onerror   = () => status("ws: error");
+    })();
+  }
+  const pollUrl = qs.get("poll");
+  if (pollUrl) {
+    setInterval(async () => {
+      try {
+        const r = await fetch(pollUrl, { cache: "no-store" });
+        if (!r.ok) { status("poll: HTTP " + r.status); return; }
+        const d = await r.json();
+        (Array.isArray(d) ? d : d.events || []).forEach(ingest);
+        status("");
+      } catch { status("poll: unreachable"); }
+    }, 5000);
+  }
+
+  // 4) demo -- so this can be shown to a room with no donation platform wired.
+  // Kicks are weighted 65/35 on purpose: the show favours kicking, and a demo
+  // that never produces a kick cannot show the mechanic it exists to sell.
+  if (CFG.demo) {
+    let n = 0;
+    setInterval(() => {
+      const word = Math.random() < 0.65 ? CFG.left : CFG.right;
+      const cents = Math.random() < 0.12
+        ? (Math.floor(Math.random() * 300) + 100) * 100   // $100-$400 pops
+        : (Math.floor(Math.random() * 45) + 5) * 100;     // $5-$50
+      ingest({ id: "demo-" + (n++), amount_cents: cents, message: "go " + word + "!" });
+    }, 1300);
+    status("demo");
+  }
+
+  render();
+  status("");
+  // Exposed for tests and for a nodecg wrapper; not used by the graphic itself.
+  window.__tbat = { ingest, sideOf, state, CFG, evaluate, kickNow, resetGuest, clock, handleMessage };
+})();
+</script>

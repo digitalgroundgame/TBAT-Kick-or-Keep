@@ -1,0 +1,142 @@
+# Pull the latest published widget from the upstream origin and open a PR.
+#
+# WHY A PULL AND NOT A PUSH. The alternative is a standing credential that lets
+# an outside org write into this one. This inverts it: this repo asks, on its
+# own schedule, and every change arrives as a PR a human here approves. No
+# cross-org token exists to leak, and nothing outside this repo can write to it.
+#
+# WHAT THE HASH CHECK DOES AND DOES NOT PROVE. manifest.json is fetched from the
+# SAME origin as the files it attests, so matching hashes prove the download is
+# self-consistent and untruncated -- NOT that it is authentic. An origin that
+# was tampered with serves a matching manifest. The real control is that a human
+# reviews the PR, so this job's only job is to fetch and propose.
+#
+# THEREFORE THIS JOB RUNS NOTHING IT DOWNLOADS. verify.mjs would normally start
+# relay.js to prove it serves; here it is invoked with --no-exec, which checks
+# hashes and returns before any spawn. Executing a freshly-downloaded file in a
+# job holding contents:write is a straight path from a compromised origin to a
+# push. The executable arms still run -- on the resulting PR, in verify.yml,
+# where the code is committed and the token is read-only.
+#
+# No third-party actions: every `uses:` is first-party GitHub, and the PR is
+# opened with the `gh` CLI already on the runner.
+name: Sync from upstream
+
+on:
+  schedule:
+    - cron: '17 15 * * 1'          # Mondays, 15:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM: https://dgg.aitherium.com/tugofwar
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Keep the token out of .git/config. Nothing here needs to push with
+          # the checkout's credential -- the push below passes one explicitly --
+          # and a persisted credential sitting in a workspace that also holds
+          # freshly-downloaded files is the thing worth removing.
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch the published kit
+        run: |
+          set -euo pipefail
+          mkdir -p .sync
+          for f in overlay.html relay.js EVENTS.md manifest.json; do
+            curl -fsSL --retry 3 "$UPSTREAM/$f" -o ".sync/$f"
+          done
+          # The control room is served as index.html upstream and lives here
+          # under its kit name.
+          curl -fsSL --retry 3 "$UPSTREAM/index.html" -o .sync/control-room.html
+          # The kit README lives inside the zip; take it from there so this
+          # repo's copy is the same bytes the operator downloads.
+          curl -fsSL --retry 3 "$UPSTREAM/kit.zip" -o .sync/kit.zip
+          cd .sync
+          unzip -o -q kit.zip 'tugofwar-kit/README.md'
+          mv tugofwar-kit/README.md README-kit.md
+          rm -rf tugofwar-kit kit.zip
+
+      - name: Strip provenance the manifest should not publish
+        run: |
+          set -euo pipefail
+          # manifest.json is the one file nothing can hash-check -- it cannot
+          # contain its own hash -- and it is the one that has carried internal
+          # provenance before: a source path, and a changelog of internal commit
+          # subjects. Upstream no longer emits either. This repo does not rely
+          # on that; it strips them itself, on every sync.
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(".sync/manifest.json", "utf8"));
+            let n = 0;
+            for (const k of ["changelog", "built_from"]) if (k in m) { delete m[k]; n++; }
+            fs.writeFileSync(".sync/manifest.json", JSON.stringify(m, null, 2) + "\n");
+            console.log("stripped " + n + " provenance key(s)");
+          '
+
+      - name: Verify what was fetched, WITHOUT running it
+        run: |
+          set -euo pipefail
+          cp verify.mjs .sync/verify.mjs
+          cd .sync && node verify.mjs --no-exec
+
+      - name: Stage the update
+        id: stage
+        run: |
+          set -euo pipefail
+          rm -f .sync/verify.mjs
+          cp .sync/* .
+          rm -rf .sync
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already current -- nothing to sync."
+            exit 0
+          fi
+          # The version comes from a downloaded file, so it is untrusted input.
+          # Restrict it before it reaches GITHUB_OUTPUT: a newline there injects
+          # arbitrary step outputs.
+          RAW="$(node -p 'require("./manifest.json").version')"
+          SAFE="$(printf '%s' "$RAW" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"
+          [ -n "$SAFE" ] || SAFE=unknown
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$SAFE" >> "$GITHUB_OUTPUT"
+          git diff --stat
+
+      - name: Open a PR
+        if: steps.stage.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.stage.outputs.version }}
+        run: |
+          set -euo pipefail
+          BRANCH=sync/upstream-kit
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -m "sync: kit ${VERSION} from upstream"
+          # Fetch the branch first so --force-with-lease has a remote-tracking
+          # ref to reason about. The checkout is depth-1 on main, so without
+          # this the lease cannot resolve and the push is rejected as "stale
+          # info" the moment a sync PR is already open -- the lane would then
+          # stop updating in silence, which is the failure worth avoiding.
+          git fetch --depth=1 "$REMOTE" "$BRANCH" || true
+          git push --force-with-lease "$REMOTE" "HEAD:$BRANCH"
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            echo "A PR is already open for ${BRANCH}; it now carries this update."
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "Sync kit ${VERSION} from upstream" \
+            --body-file .github/sync-pr-body.md

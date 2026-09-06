@@ -1,0 +1,29 @@
+{
+  "built_from": "aitherium/tugofwar-overlay",
+  "files": {
+    "EVENTS.md": {
+      "bytes": 7951,
+      "sha256": "f04f1a323e2dd010ffe86a354020ec6135fa5113baf2a8336408508a0d8956f8"
+    },
+    "README.md": {
+      "bytes": 2511,
+      "sha256": "40d5965293c9b8280f5c80a3b412aefe04df91c3d61ec0af07a86016da8cabde"
+    },
+    "control-room.html": {
+      "bytes": 17958,
+      "sha256": "7205fccaaca2747cef01e46cf43fb434b4a512b1d6299c59ce327cfa8ddcd3ca"
+    },
+    "overlay.html": {
+      "bytes": 32133,
+      "sha256": "c5bf7da9fc96ba1fa3a4e7ac10efdf06bb2fb3bcc565aa85353c4b7443a07594"
+    },
+    "relay.js": {
+      "bytes": 12667,
+      "sha256": "9a0554955e2b786f48f927af7ec197f8d1add173e820cfcacd588cbd8ca28451"
+    }
+  },
+  "kit": "tugofwar",
+  "source_commit": "0b42377aa486673225b1383cfe0de6a43c2caa46",
+  "source_date": "2026-09-06T14:48:39-07:00",
+  "version": "2026.09.06.0b42377"
+}

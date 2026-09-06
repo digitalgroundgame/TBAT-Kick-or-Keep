@@ -1,0 +1,30 @@
+# Prove the published widget is the widget the manifest describes, and that it
+# still runs. Every check here can fail: the hashes catch a hand-edit or a
+# truncated sync, and the relay arms actually start the server and fetch the
+# pages the way OBS and the operator do.
+#
+# ubuntu-latest is correct for THIS repo: it is public, so GitHub's hosted
+# runners are free here.
+name: Verify kit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # No dependencies to install -- the relay is zero-dependency on purpose,
+      # so "run this on the streaming rig" is one command and not a setup step.
+      - name: Verify hashes, relay self-test, and HTTP serving
+        run: node verify.mjs

@@ -1,0 +1,369 @@
+<!--
+  CONTROL ROOM for the tug-of-war donation overlay (also the demo stage).
+
+  The OVERLAY (overlay.html) is transparent by design: in a browser, on its
+  own, it looks like nothing -- it is an OBS browser source that composites
+  over the stream. THIS page is where a human runs the show: the same overlay
+  in an iframe above a stand-in stream scene, every operator control, a live
+  state readout, the segment config, and the exact OBS URL to paste.
+
+  It embeds `overlay.html` rather than reimplementing it, and drives it with
+  the SAME postMessage events a donation feed would -- a page that reimplements
+  the graphic agrees with itself and disagrees with air.
+
+  OBS SYNC: the copy of the overlay inside OBS is a separate process, so page
+  buttons cannot reach it directly. Both instances can share one WebSocket
+  relay: point the OBS overlay at `?ws=wss://relay`, put the same URL in the
+  relay box here, and every control action (donations included) is broadcast
+  to the relay as well as to the local preview.
+
+  THE KIT: everything this page needs to run the show -- overlay, control
+  room, relay, README -- is downloadable as one kit.zip next to these pages,
+  so the operator can run the whole thing off a USB stick with zero connection
+  to the platform. The zip is built by the EMITTER from these same bytes; a
+  zip that disagreed with the pages it ships would be the drift this file
+  exists to prevent.
+-->
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tug of War — control room</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0d0d10; color: #e8e8ee; min-height: 100vh;
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  header { padding: 28px 24px 12px; max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 24px; font-weight: 800; letter-spacing: -.01em; }
+  .sub { margin: 0; font-size: 14px; opacity: .68; line-height: 1.5; max-width: 76ch; }
+  main { max-width: 1100px; margin: 0 auto; padding: 0 24px 40px; }
+
+  /* The "stream": a scene the transparent overlay composites onto. */
+  .stage {
+    position: relative; margin: 20px 0 12px; border-radius: 12px; overflow: hidden;
+    aspect-ratio: 16 / 6;
+    background:
+      radial-gradient(120% 90% at 20% 10%, #24304a 0%, transparent 60%),
+      radial-gradient(120% 90% at 85% 20%, #3a2036 0%, transparent 55%),
+      #14161d;
+    border: 1px solid rgba(255,255,255,.09);
+  }
+  .stage::after {
+    content: "stream"; position: absolute; right: 12px; bottom: 10px;
+    font-size: 11px; letter-spacing: .18em; text-transform: uppercase; opacity: .25;
+  }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  .live {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    font-size: 13px; padding: 8px 12px; margin-bottom: 12px;
+    background: rgba(255,255,255,.05); border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  .live strong.kick { color: #FF2537; }
+  .live strong.keep { color: #3D6DFF; }
+  .live strong.danger { color: #FF2537; }
+
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button, input, select {
+    font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.16); background: #1b1e27; color: #e8e8ee;
+  }
+  input, select { cursor: text; width: 96px; }
+  input[type="number"] { width: 84px; }
+  button:hover { background: #232734; }
+  button.l { border-color: #CE1126; }
+  button.r { border-color: #3D6DFF; }
+  button.ghost { opacity: .75; }
+  /* The play control: appears only while the KICKED splash is holding between
+     guests. White on black -- it is the one button the operator waits for. */
+  .go {
+    display: block; width: 100%; margin: 0 0 12px; padding: 16px;
+    font-size: 18px; font-weight: 800; letter-spacing: .02em;
+    background: #fff; color: #000; border: 1px solid #fff; border-radius: 8px;
+    animation: go-pulse 1.1s infinite;
+  }
+  .go:hover { background: #ffdde3; }
+  .go[hidden] { display: none; }
+  @keyframes go-pulse { 50% { box-shadow: 0 0 0 6px rgba(255, 37, 55, .3); } }
+  fieldset {
+    margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.1);
+  }
+  legend { font-size: 12px; opacity: .7; padding: 0 6px; }
+  .note {
+    margin-top: 14px; padding: 14px 16px; border-radius: 10px; font-size: 13px;
+    line-height: 1.6; background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  code { background: rgba(255,255,255,.09); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  a { color: #7fc4ff; }
+</style>
+
+<header>
+  <h1>Tug of War — control room</h1>
+  <p class="sub">
+    KICK donations fill the pot toward the goal; KEEP donations raise the goal — the
+    goalkeepers push the line back. When the pot meets the goal the guest is kicked,
+    never before their guaranteed minimum airtime (keep can still save them during the
+    countdown). The KICKED message then HOLDS until you press the play button — the
+    next contestant takes their seat first, and their clock starts when you hit play.
+    Donations that arrive while the message is up are buffered and count on the next
+    guest's board. A donation of $25 or more pops its amount on the side it backed.
+  </p>
+</header>
+
+<main>
+  <div class="stage">
+    <iframe id="ov" title="Overlay preview" src="overlay.html?goal=5000&amp;guarantee=30"></iframe>
+  </div>
+
+  <!-- Shown only while the overlay holds a KICKED splash (driven by the
+       snapshot's held flag). This is the button the show waits on: the next
+       contestant sits down, the operator presses it, and their clock starts. -->
+  <button class="go" id="playNext" hidden>NEXT GUEST READY — START THEM</button>
+
+  <div class="live" id="live">
+    <span>POT <strong class="kick" id="livePot">$0</strong></span>
+    <span>GOAL <strong class="keep" id="liveGoal">$50</strong></span>
+    <span>TIMER <strong id="liveTimer">—</strong></span>
+    <span>GUEST <strong id="liveGuest">1</strong></span>
+    <span>KICKED <strong id="liveKicked">0</strong></span>
+  </div>
+
+  <div class="controls">
+    <button class="l" data-side="kick" data-amt="5">+$5 kick</button>
+    <button class="l" data-side="kick" data-amt="25">+$25 kick</button>
+    <button class="l" data-side="kick" data-amt="250">+$250 kick</button>
+    <button class="r" data-side="keep" data-amt="5">+$5 keep</button>
+    <button class="r" data-side="keep" data-amt="25">+$25 keep</button>
+    <button class="r" data-side="keep" data-amt="250">+$250 keep</button>
+    <button class="ghost" id="ambiguous">$50 "kick or keep?"</button>
+  </div>
+
+  <div class="row">
+    <button class="ghost" id="clear">Reset board</button>
+    <button class="ghost" id="restart">Restart timer</button>
+    <button class="ghost" id="newguest">New guest</button>
+    <input id="goalAmt" type="number" min="1" placeholder="goal $" value="100">
+    <button class="ghost" id="setgoal">Set goal</button>
+    <button class="ghost" id="demo">Auto feed</button>
+  </div>
+
+  <div class="row">
+    <input id="manualAmt" type="number" min="0.01" step="0.01" placeholder="amount $">
+    <select id="manualSide">
+      <option value="kick">kick (fills the pot)</option>
+      <option value="keep">keep (raises the goal)</option>
+    </select>
+    <button id="manualAdd">Add donation</button>
+  </div>
+
+  <fieldset>
+    <legend>Segment settings — rebuilds the preview, exactly as OBS would load it</legend>
+    <div class="row">
+      <label>Kick goal $ <input id="cfgGoal" type="number" min="1" value="100"></label>
+      <label>Guarantee s <input id="cfgGuarantee" type="number" min="10" value="120"></label>
+      <label>Pop $ <input id="cfgBig" type="number" min="1" value="25"></label>
+      <button class="ghost" id="applyCfg">Apply</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>OBS browser source (1920×1080, transparent)</legend>
+    <div class="row">
+      <code id="obs" style="flex:1; white-space:nowrap; overflow-x:auto;"></code>
+      <button id="copyObs">Copy</button>
+    </div>
+    <div class="row">
+      <label>Relay ws:// (optional — drives the OBS copy too)
+        <input id="relay" type="text" placeholder="ws://localhost:8787" style="width:260px;"></label>
+      <span id="relayState" style="font-size:13px;opacity:.8;"></span>
+      <a href="relay.js" download style="font-size:13px;">Get the relay (relay.js)</a>
+      <span style="opacity:.45;">·</span>
+      <a href="kit.zip" download style="font-size:13px;">Download the whole kit (kit.zip — runs with no platform)</a>
+    </div>
+  </fieldset>
+
+  <div class="note">
+    <strong>For OBS:</strong> add a Browser Source pointing at <code id="obs2"></code>.
+    The overlay accepts <code>?goal=</code> (cents), <code>&amp;guarantee=</code> (seconds),
+    <code>&amp;big=</code> (cents), <code>&amp;left=</code>/<code>&amp;right=</code> (keywords),
+    and <code>&amp;ws=</code> or <code>&amp;poll=</code> for a live donation feed.
+    To make OBS follow this page's buttons, run a tiny WebSocket relay, put its URL in the
+    relay box here, and add <code>&amp;ws=</code> with the same URL to the OBS overlay.
+  </div>
+</main>
+
+<script>
+  const ov = document.getElementById("ov");
+  let n = 0;
+
+  // Every action goes to the preview AND, when a relay is set, to the relay —
+  // so the OBS copy of the overlay (connected with ?ws=) follows the buttons.
+  let relay = null;
+  function broadcast(msg) {
+    ov.contentWindow.postMessage(msg, "*");
+    if (relay && relay.readyState === WebSocket.OPEN) {
+      relay.send(JSON.stringify(msg));
+    }
+  }
+  const relayInput = document.getElementById("relay");
+  // RECONNECT, and SAY SO. The overlay's own ?ws= side already reconnects every
+  // 3s; this side did not, and that asymmetry became dangerous the moment the
+  // KICKED splash stopped self-hiding: the splash's ONLY exit is an operator
+  // message, so a dropped relay leaves the OBS copy under a full-cover splash
+  // indefinitely while this page still looks perfectly fine. A silent
+  // readyState check was the whole failure -- broadcast() just skipped the
+  // send. The status line makes the dead socket visible, because an operator
+  // pressing play and seeing nothing happen needs to know WHY.
+  let relayWant = "";
+  let relayTimer = null;
+  const relayStatus = (t) => {
+    const el = document.getElementById("relayState");
+    if (el) el.textContent = t;
+  };
+  function connectRelay() {
+    clearTimeout(relayTimer);
+    if (relay) { try { relay.close(); } catch {} relay = null; }
+    if (!relayWant) { relayStatus(""); return; }
+    let ws;
+    try { ws = new WebSocket(relayWant); } catch { relayStatus("relay: bad url"); return; }
+    relay = ws;
+    relayStatus("relay: connecting");
+    ws.onopen  = () => relayStatus("relay: connected");
+    ws.onerror = () => relayStatus("relay: error");
+    ws.onclose = () => {
+      relay = null;
+      relayStatus("relay: DISCONNECTED -- OBS is not following these buttons");
+      // Keep trying: the rig's relay is usually restarted mid-show, not gone.
+      relayTimer = setTimeout(connectRelay, 3000);
+    };
+  }
+  relayInput.addEventListener("change", () => {
+    relayWant = relayInput.value.trim();
+    connectRelay();
+    refreshObs();   // the OBS URL carries &ws= from this box
+  });
+
+  const send = (amountDollars, word) => broadcast({
+    type: "donation",
+    payload: { id: "manual-" + (n++), amount_cents: Math.round(amountDollars * 100), message: "go " + word + "!" },
+  });
+
+  document.querySelectorAll("button[data-side]").forEach((b) => {
+    b.addEventListener("click", () => send(Number(b.dataset.amt), b.dataset.side));
+  });
+  // Shows the ambiguous case honestly: it lands as a donation, not as a vote,
+  // so the bar must NOT move.
+  document.getElementById("ambiguous").addEventListener("click", () => broadcast({
+    type: "donation",
+    payload: { id: "manual-" + (n++), amount_cents: 5000, message: "kick or keep?" },
+  }));
+  document.getElementById("clear").addEventListener("click", () => broadcast({ type: "clear" }));
+  document.getElementById("restart").addEventListener("click", () => broadcast({ type: "window" }));
+  document.getElementById("newguest").addEventListener("click", () => broadcast({ type: "reset" }));
+  // The play control (hidden unless the overlay is holding a KICKED splash).
+  // "play" and "reset" are the same door inside the overlay; this button is
+  // the prominent, always-correct action the operator reaches for between
+  // guests. Broadcast reaches the preview AND the OBS copy via the relay.
+  document.getElementById("playNext").addEventListener("click", () => broadcast({ type: "play" }));
+  document.getElementById("setgoal").addEventListener("click", () => {
+    const v = Number(document.getElementById("goalAmt").value);
+    if (Number.isFinite(v) && v > 0) broadcast({ type: "setgoal", goal_cents: Math.round(v * 100) });
+  });
+  document.getElementById("manualAdd").addEventListener("click", () => {
+    const v = Number(document.getElementById("manualAmt").value);
+    const side = document.getElementById("manualSide").value;
+    if (Number.isFinite(v) && v > 0) send(v, side);
+  });
+  document.getElementById("demo").addEventListener("click", () => {
+    ov.src = "overlay.html?demo=1&goal=5000&guarantee=30";
+  });
+  document.getElementById("applyCfg").addEventListener("click", () => {
+    const g = Math.max(1, Number(document.getElementById("cfgGoal").value) || 100);
+    const t = Math.max(10, Number(document.getElementById("cfgGuarantee").value) || 120);
+    const b = Math.max(1, Number(document.getElementById("cfgBig").value) || 25);
+    ov.src = "overlay.html?goal=" + (g * 100) + "&guarantee=" + t + "&big=" + (b * 100);
+    refreshObs();
+  });
+
+  function refreshObs() {
+    // The OBS URL carries the operator's config AND the relay — the whole
+    // show in one paste. When the relay serves this page (node relay.js),
+    // location resolves to http://127.0.0.1:8787/overlay.html — a normal
+    // http URL OBS handles with query params guaranteed.
+    const g = Math.max(1, Number(document.getElementById("cfgGoal").value) || 100);
+    const t = Math.max(10, Number(document.getElementById("cfgGuarantee").value) || 120);
+    const b = Math.max(1, Number(document.getElementById("cfgBig").value) || 25);
+    const relayUrl = document.getElementById("relay").value.trim();
+    let url = new URL("overlay.html", location.href).href;
+    url += "?goal=" + (g * 100) + "&guarantee=" + t + "&big=" + (b * 100);
+    if (relayUrl) url += "&ws=" + encodeURIComponent(relayUrl);
+    document.getElementById("obs").textContent = url;
+    document.getElementById("obs2").textContent = url;
+  }
+  document.getElementById("copyObs").addEventListener("click", () => {
+    navigator.clipboard && navigator.clipboard.writeText(document.getElementById("obs").textContent);
+  });
+
+  // Live readout: the overlay answers a snapshot request with its own state —
+  // the same numbers the preview (and OBS, on the same feed) is showing.
+  function mmss(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+  window.addEventListener("message", (e) => {
+    const d = e.data;
+    if (!d || d.type !== "snapshot" || !d.payload) return;
+    const p = d.payload;
+    document.getElementById("livePot").textContent = "$" + (p.pot / 100).toFixed(p.pot % 100 ? 2 : 0);
+    document.getElementById("liveGoal").textContent = "$" + (p.goal / 100).toFixed(p.goal % 100 ? 2 : 0);
+    document.getElementById("liveGuest").textContent = String(p.guest);
+    document.getElementById("liveKicked").textContent = String(p.kicked);
+    const el = document.getElementById("liveTimer");
+    // Held = a KICKED splash is up and the board is frozen between guests.
+    // The play button appears -- nothing counts down until the operator uses
+    // it, because the next contestant's clock has not started.
+    document.getElementById("playNext").hidden = !p.held;
+    if (p.held) {
+      el.textContent = "NEXT GUEST";
+      el.className = "danger";
+      return;
+    }
+    const guarantee = p.guarantee || 120000;   // snapshot carries it; the fallback
+                                               // only covers an old overlay in a cache
+    if (p.kickPending) {
+      const left = Math.max(0, Math.ceil((p.kickPending - p.now) / 1000));
+      el.textContent = "KICK " + mmss(left);
+      el.className = "danger";
+    } else if (p.now < p.guestStart + guarantee) {
+      el.textContent = "WINDOW " + mmss((p.guestStart + guarantee - p.now) / 1000);
+      el.className = "";
+    } else {
+      el.textContent = "ON AIR " + mmss((p.now - p.guestStart) / 1000);
+      el.className = "";
+    }
+  });
+  setInterval(() => ov.contentWindow.postMessage({ type: "snapshot" }, "*"), 1000);
+
+  refreshObs();
+</script>
+<script>
+  // Version badge from manifest.json (written beside this page by the emitter).
+  // A screenshot of the control room then names the build. Silent when absent.
+  (function () {
+    fetch("manifest.json", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((m) => {
+      if (!m || !m.version) return;
+      const b = document.createElement("div");
+      b.textContent = "kit v" + m.version;
+      b.title = "built from " + m.source_commit + " — paste this version when reporting a problem";
+      b.style.cssText = "position:fixed;right:10px;bottom:8px;font:11px/1.4 system-ui,sans-serif;opacity:.55;"
+        + "padding:2px 8px;border-radius:6px;background:rgba(0,0,0,.4);color:#fff;z-index:9999";
+      document.body.appendChild(b);
+    }).catch(() => {});
+  })();
+</script>
+<script src="/support-widget.js" defer></script>

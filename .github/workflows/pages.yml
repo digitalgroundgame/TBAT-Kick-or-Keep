@@ -1,0 +1,59 @@
+# Publish a live, public demo of the control room + overlay to GitHub Pages.
+#
+# This repo deploys ITSELF -- nothing outside it pushes to its Pages branch.
+# One publisher per surface; two writers on one artifact is how a deploy
+# silently reverts someone else's.
+#
+# The demo runs with no relay (the control room's own preview is driven by
+# postMessage), so a visitor sees the real graphic without installing anything.
+name: Publish demo to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # Refuse to publish a copy that does not match its own manifest. A demo
+      # serving different bytes from the kit is worse than no demo: it is the
+      # drift this repo's one-writer rule exists to prevent, wearing a URL.
+      - name: Verify before publishing
+        run: node verify.mjs
+      - name: Assemble the site
+        run: |
+          set -eu
+          mkdir -p site
+          cp overlay.html control-room.html manifest.json EVENTS.md README.md site/
+          # The control room is the landing page: the overlay is transparent by
+          # design and looks like nothing on its own.
+          cp control-room.html site/index.html
+          ls -la site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

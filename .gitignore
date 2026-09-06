@@ -1,0 +1,7 @@
+# Build artifacts are published as RELEASE ASSETS, never committed: git history
+# is permanent, so every clone would pay for every past copy of the zip forever
+# and a rebuild would add one rather than replace one.
+kit.zip
+kit.zip.sha256
+site/
+node_modules/

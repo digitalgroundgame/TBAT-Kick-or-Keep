@@ -1,0 +1,7 @@
+# These files are HASHED in manifest.json, and the hashes are over LF bytes.
+# Git's autocrlf would rewrite them to CRLF on checkout on Windows -- where the
+# streaming rig actually is -- and every hash would then mismatch, so the kit
+# would fail its own verify on the machine that runs the show. Checking them
+# out byte-for-byte is not a preference here, it is what makes the manifest
+# mean anything.
+* -text
