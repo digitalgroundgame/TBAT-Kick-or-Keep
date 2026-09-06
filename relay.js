@@ -123,6 +123,26 @@ function serveHttp(socket, req) {
   });
 }
 
+/** Which Origins may open a WebSocket. Absent is allowed (a native client
+ *  sends none); this relay's own loopback origin is allowed; everything
+ *  else needs --allow-origin, so a foreign TAB cannot drive the show. */
+const ALLOWED_ORIGINS = [];
+for (let i = 0; i < process.argv.length; i++) {
+  if (process.argv[i] === "--allow-origin" && process.argv[i + 1]) {
+    ALLOWED_ORIGINS.push(process.argv[i + 1].replace(/[/]+$/, "").toLowerCase());
+  }
+}
+let BOUND_PORT = 0;
+function originAllowed(req) {
+  const m = req.match(/^Origin:[ 	]*(.*)$/im);
+  if (!m) return true;                         // no Origin: a native client
+  const o = m[1].trim().replace(/[/]+$/, "").toLowerCase();
+  if (!o || o === "null") return true;         // file:// pages send "null"
+  if (ALLOWED_ORIGINS.indexOf(o) >= 0) return true;
+  return o === "http://127.0.0.1:" + BOUND_PORT
+      || o === "http://localhost:" + BOUND_PORT;
+}
+
 function handle(socket) {
   let buf = Buffer.alloc(0);
   let partial = "";                                     // fragmented text frame
@@ -152,6 +172,24 @@ function handle(socket) {
       buf = buf.slice(i + 4);
       const m = req.match(/Sec-WebSocket-Key: ([^\r\n]+)/i);
       if (!m) { serveHttp(socket, req); return; }
+      // ORIGIN GATE. A WebSocket is exempt from the same-origin policy, so
+      // ANY page the operator happens to have open can connect to this relay
+      // and drive the graphic that is on air -- fake a donation, kick the
+      // guest, reset the board. Binding to 127.0.0.1 does not prevent it;
+      // the attacker is a tab, not a host on the network.
+      //
+      // Allowed: no Origin at all (a native client -- node, OBS in some
+      // builds, --selftest), or this relay's own loopback origin, which is
+      // where the control room and the OBS overlay are served from. An
+      // overlay hosted somewhere else and pointed here with ?ws= is a real
+      // setup, so it has a supported door rather than a silent refusal:
+      //   node relay.js --allow-origin https://your.host
+      if (!originAllowed(req)) {
+        console.error("relay: refused a WebSocket from a foreign origin -- "
+          + "use --allow-origin if this is your own page");
+        socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+      }
       socket.write(
         "HTTP/1.1 101 Switching Protocols\r\n" +
         "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
@@ -190,6 +228,7 @@ function serve(port) {
     // (or a busy 8787 fallback) would otherwise print a URL that does not
     // connect. Measured 2026-09-01 -- the offline-kit test caught it.
     const actual = server.address().port;
+    BOUND_PORT = actual;
     const mf = kitManifest();
     const ver = mf && mf.version
       ? "v" + mf.version + " (" + String(mf.source_commit || "").slice(0, 10) + ")"
@@ -208,6 +247,7 @@ function selftest() {
   const server = net.createServer(handle);
   server.listen(0, "127.0.0.1", () => {
     const port = server.address().port;
+    BOUND_PORT = port;
     const keyA = "aGVsbG8gd29ybGQ=", keyB = "c29tZS1yYW5kb20ta2V5";
     const BIG = "x".repeat(150);                        // exercises the 126-length path
     const mask = Buffer.from([1, 2, 3, 4]);
@@ -289,7 +329,11 @@ if (process.argv.includes("--selftest")) {
   console.log(mf && mf.version ? mf.version : "unversioned");
 } else {
   const port = parseInt(process.argv[2] || "8787", 10);
-  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+  // 0 is ALLOWED and means "any free port". serve() announces the port it
+  // actually bound, so nothing downstream has to guess -- and serve()'s own
+  // comment already told people to run "node relay.js 0" while this guard
+  // refused it, which is a documented invocation that has never once worked.
+  if (!Number.isFinite(port) || port < 0 || port > 65535) {
     console.error("bad port: " + process.argv[2]);
     process.exit(1);
   }

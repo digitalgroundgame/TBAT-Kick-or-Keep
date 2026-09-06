@@ -288,6 +288,10 @@
   // Donations that arrive while held. They are not lost and do not start the
   // NEXT guest early -- they land on the fresh board when play is pressed.
   let heldQueue = [];
+  // The relay socket, once it is OPEN. handleMessage() needs it to answer a
+  // snapshot request that arrived over the wire, and that code runs long
+  // before the socket is created -- so it is declared here, not down there.
+  let liveWs = null;
 
   const money = (cents) => {
     const d = cents / 100;
@@ -339,6 +343,11 @@
   function endHold() {
     state.held = false;
     document.getElementById("splash").hidden = true;
+    // Repaint the timer NOW, not on the next 250ms tick. tick() owns the text,
+    // but leaving visibility to it means the badge is missing for up to a
+    // quarter of a second every time the splash comes down, and shows through
+    // the fresh splash for the same quarter-second after a kick.
+    document.getElementById("timer").hidden = false;
   }
 
   /** A fresh guest: pot back to zero, goal back to the base, guarantee
@@ -367,6 +376,7 @@
     state.kicked += 1;
     state.kickPending = null;
     state.held = true;
+    document.getElementById("timer").hidden = true;   // see endHold(): no transient
     splash("KICKED!",
            money(raised) + " raised to kick",
            "guest " + (state.guest + 1) + " next");
@@ -602,23 +612,39 @@
         render();
       }
     }
-    if (d.type === "snapshot") {                          // control panel: a live
+    // A snapshot REQUEST carries no payload; a snapshot REPLY does. Without
+    // that test two overlays on one relay answer each other forever, because
+    // a reply looks exactly like a request.
+    if (d.type === "snapshot" && !d.payload) {            // control panel: a live
+      const reply = { type: "snapshot", payload: {
+        pot: state.pot, goal: state.goal,
+        guest: state.guest, kicked: state.kicked,
+        kickPending: state.kickPending,
+        // held: the KICKED splash is up and the board is frozen -- the
+        // control room shows its play button off this flag, never off a
+        // timer guess.
+        held: state.held,
+        guestStart: state.guestStart, now: clock.now(),
+        // The guarantee is CONFIG, and the control room's timer readout
+        // must derive from the same value the overlay enforces -- a
+        // hardcoded twin in the control page silently disagrees the moment
+        // the operator sets a 30s guarantee.
+        guarantee: GUARANTEE_MS,
+      } };
       if (source && typeof source.postMessage === "function") {
-        source.postMessage({ type: "snapshot", payload: {
-          pot: state.pot, goal: state.goal,
-          guest: state.guest, kicked: state.kicked,
-          kickPending: state.kickPending,
-          // held: the KICKED splash is up and the board is frozen -- the
-          // control room shows its play button off this flag, never off a
-          // timer guess.
-          held: state.held,
-          guestStart: state.guestStart, now: clock.now(),
-          // The guarantee is CONFIG, and the control room's timer readout
-          // must derive from the same value the overlay enforces -- a
-          // hardcoded twin in the control page silently disagrees the moment
-          // the operator sets a 30s guarantee.
-          guarantee: GUARANTEE_MS,
-        } }, "*");
+        source.postMessage(reply, "*");
+      } else if (liveWs && liveWs.readyState === 1) {
+        // ANSWER ON THE WIRE THE QUESTION CAME IN ON. A socket message has no
+        // window to post back to (source is null), so this branch used to
+        // drop the request in silence -- and the control room's play button,
+        // which is gated on held, therefore tracked only the PREVIEW iframe,
+        // never the copy that is actually on air. The two diverge for
+        // ordinary reasons: OBS reloads the scene, the relay drops and
+        // reconnects, the operator changes the goal and re-pastes the URL.
+        // When they did, the graphic on air sat under a full-cover KICKED
+        // splash whose only exit is an operator message, while the button
+        // that sends that message was hidden.
+        liveWs.send(JSON.stringify(reply));
       }
     }
   }
@@ -634,7 +660,7 @@
     (function connect() {
       let ws;
       try { ws = new WebSocket(wsUrl); } catch { status("ws: bad url"); return; }
-      ws.onopen    = () => status("");
+      ws.onopen    = () => { liveWs = ws; status(""); };
       // handleMessage, NOT ingest: ingest() takes a donation, while
       // handleMessage() dispatches reset/clear/window/setgoal too. Routing the
       // socket at ingest silently DROPPED every operator control on the OBS
@@ -644,7 +670,11 @@
       ws.onmessage = (m) => { try { handleMessage(JSON.parse(m.data), null); } catch {} };
       // Reconnect: a stream runs for hours and a socket WILL drop. Silent
       // disconnection would freeze the bar while looking perfectly fine.
-      ws.onclose   = () => { status("ws: reconnecting"); setTimeout(connect, 3000); };
+      ws.onclose   = () => {
+        if (liveWs === ws) liveWs = null;   // never answer down a dead socket
+        status("ws: reconnecting");
+        setTimeout(connect, 3000);
+      };
       ws.onerror   = () => status("ws: error");
     })();
   }

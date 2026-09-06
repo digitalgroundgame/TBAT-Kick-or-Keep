@@ -150,7 +150,24 @@ guests -- that is the flag the control room's play button is drawn from. All
 amounts are integer CENTS and all times are epoch milliseconds. `guarantee` is
 sent so a control surface never hardcodes its own copy of the segment length.
 
-## 9. Query parameters are CLAMPED, not rejected
+## 9. Who may open a socket to the relay
+
+A WebSocket is exempt from the same-origin policy, so without a check ANY page
+the operator happens to have open could dial the relay and drive the graphic
+that is on air. Binding to loopback does not prevent that -- the caller is a
+tab, not a host on the network.
+
+The relay therefore refuses a WebSocket whose `Origin` is not its own, with
+**403**. Still allowed: a request with no `Origin` at all (a native client), a
+`file://` page (which sends `null`), and the relay's own loopback origin, which
+is where it serves the control room and the overlay from.
+
+Serving the overlay from your own site and pointing it here with `?ws=` is a
+real setup and has a supported door:
+
+    node relay.js --allow-origin https://your.host
+
+## 10. Query parameters are CLAMPED, not rejected
 
 Three settings have a silent floor. Asking for less does not fail and does not
 warn -- it is quietly raised, so a segment configured below one of these runs
@@ -165,7 +182,7 @@ with a value nobody chose:
 An unparseable value falls back to the default (goal 10000, guarantee 120,
 big 2500) rather than the floor.
 
-## 10. What the overlay never does
+## 11. What the overlay never does
 
 It sends no requests except the poll you configure, stores nothing, carries no
 credentials, and reads no donor identity. If your platform can produce a public

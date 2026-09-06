@@ -1,6 +1,6 @@
 # Tug-of-War donation overlay -- operator kit
 
-Kit version **2026.09.06.0b42377** -- built from commit `0b42377aa4` (2026-09-06).
+Kit version **2026.09.06.b92d5a4** -- built from commit `b92d5a4a4c` (2026-09-06).
 Verify your download: `sha256sum -c kit.zip.sha256` (PowerShell: `Get-FileHash kit.zip`); per-file hashes are in `manifest.json`.
 When reporting a problem, paste the version line `node relay.js` prints (or run `node relay.js --version`).
 

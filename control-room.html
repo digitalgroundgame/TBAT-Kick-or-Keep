@@ -206,9 +206,17 @@
   let relay = null;
   function broadcast(msg) {
     ov.contentWindow.postMessage(msg, "*");
+    if (!relayWant) return;                 // no relay configured: preview only
     if (relay && relay.readyState === WebSocket.OPEN) {
       relay.send(JSON.stringify(msg));
+      return;
     }
+    // SAY WHEN A PRESS DID NOT LEAVE THE ROOM. The preview always updates, so
+    // a dropped send looks exactly like a working one: the operator sees the
+    // bar move here and nothing move on air, and concludes the overlay is
+    // broken. This is the only moment that distinction is knowable.
+    relayStatus("relay: NOT SENT (" + (relay ? "still connecting" : "disconnected")
+                + ") -- OBS did not get that");
   }
   const relayInput = document.getElementById("relay");
   // RECONNECT, and SAY SO. The overlay's own ?ws= side already reconnects every
@@ -233,9 +241,32 @@
     try { ws = new WebSocket(relayWant); } catch { relayStatus("relay: bad url"); return; }
     relay = ws;
     relayStatus("relay: connecting");
-    ws.onopen  = () => relayStatus("relay: connected");
-    ws.onerror = () => relayStatus("relay: error");
+    // EVERY handler below checks that this is STILL the current socket, and
+    // that check is the whole fix for a defect that made the buttons drop
+    // messages every few seconds while the status line read "connected".
+    //
+    // close() is asynchronous. connectRelay() closes the old socket and
+    // immediately installs a new one, so the OLD socket's onclose fires
+    // afterwards -- and it used to set relay = null unconditionally, throwing
+    // away the socket that had just replaced it, then schedule ANOTHER
+    // reconnect 3s later, which closed the next live socket in turn. A
+    // self-feeding loop: measured in a real browser, the third and fourth
+    // button presses of a session were silently dropped (readyState 0, then
+    // relay null) with both ends reporting "connected".
+    ws.onopen  = () => { if (relay === ws) relayStatus("relay: connected"); };
+    // The OBS copy answers the snapshot poll down this socket. That reply is
+    // the only way this page can know what the graphic ON AIR is doing --
+    // everything else it renders comes from the preview iframe, which is a
+    // different overlay with its own state.
+    ws.onmessage = (m) => {
+      if (relay !== ws) return;
+      let d;
+      try { d = JSON.parse(m.data); } catch { return; }
+      if (d && d.type === "snapshot" && d.payload) applySnapshot(d.payload, true);
+    };
+    ws.onerror = () => { if (relay === ws) relayStatus("relay: error"); };
     ws.onclose = () => {
+      if (relay !== ws) return;   // a socket we already replaced: not news
       relay = null;
       relayStatus("relay: DISCONNECTED -- OBS is not following these buttons");
       // Keep trying: the rig's relay is usually restarted mid-show, not gone.
@@ -315,10 +346,18 @@
     const s = Math.max(0, Math.floor(sec));
     return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }
-  window.addEventListener("message", (e) => {
-    const d = e.data;
-    if (!d || d.type !== "snapshot" || !d.payload) return;
-    const p = d.payload;
+  // WHICH OVERLAY IS THE AUTHORITY. Two copies answer this page: the preview
+  // iframe (postMessage) and the copy in OBS (over the relay). They are NOT
+  // interchangeable — the one on air is the one that matters, and they diverge
+  // for ordinary reasons: OBS reloads the scene, the relay drops and
+  // reconnects, the operator changes the goal and does not re-paste the URL.
+  // While the on-air copy is answering, it wins and the preview is ignored;
+  // if it stops answering, this falls back to the preview within 4s rather
+  // than freezing on a stale reading.
+  let lastOnAir = 0;
+  function applySnapshot(p, onAir) {
+    if (onAir) lastOnAir = Date.now();
+    else if (Date.now() - lastOnAir < 4000) return;
     document.getElementById("livePot").textContent = "$" + (p.pot / 100).toFixed(p.pot % 100 ? 2 : 0);
     document.getElementById("liveGoal").textContent = "$" + (p.goal / 100).toFixed(p.goal % 100 ? 2 : 0);
     document.getElementById("liveGuest").textContent = String(p.guest);
@@ -346,8 +385,21 @@
       el.textContent = "ON AIR " + mmss((p.now - p.guestStart) / 1000);
       el.className = "";
     }
+  }
+  window.addEventListener("message", (e) => {
+    const d = e.data;
+    if (!d || d.type !== "snapshot" || !d.payload) return;
+    applySnapshot(d.payload, false);
   });
-  setInterval(() => ov.contentWindow.postMessage({ type: "snapshot" }, "*"), 1000);
+  // Ask BOTH: the preview directly, and the OBS copy through the relay. The
+  // request carries no payload, which is how an overlay tells a request from
+  // another overlay's reply.
+  setInterval(() => {
+    ov.contentWindow.postMessage({ type: "snapshot" }, "*");
+    if (relay && relay.readyState === WebSocket.OPEN) {
+      relay.send(JSON.stringify({ type: "snapshot" }));
+    }
+  }, 1000);
 
   refreshObs();
 </script>
