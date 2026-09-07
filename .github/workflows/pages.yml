@@ -44,9 +44,11 @@ jobs:
           # site without them serves a page whose download buttons 404 while
           # looking perfectly fine.
           cp relay.js README-kit.md site/
-          # The control room is the landing page: the overlay is transparent by
-          # design and looks like nothing on its own.
-          cp control-room.html site/index.html
+          # index.html is a real landing page (what this is, how to run it,
+          # where to get a frozen copy). The control room stays at its own
+          # URL and is linked from it; the overlay is transparent by design
+          # and looks like nothing on its own, so it is never the landing page.
+          cp index.html site/index.html
           ls -la site
 
       - name: Build the kit zip the demo offers

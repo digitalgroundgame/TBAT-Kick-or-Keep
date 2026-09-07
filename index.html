@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kick or Keep — Digital Ground Game</title>
+<meta name="description" content="The donation tug-of-war for the TBAT stream. Kick money fills the pot, keep money pushes the goal away. Runs off a USB stick — no account, no network.">
+<style>
+/* Digital Ground Game — kick is the primary blue, keep is the accent red.
+   The whole graphic is a fight between those two colours, so the page is too. */
+:root{
+  --kick:#1144FF; --keep:#FF0F43;
+  --bg:#FBFCFF; --panel:#fff; --ink:#0B1020; --muted:#5A6480;
+  --line:rgba(11,16,32,.12); --code:#F2F4FA; --shadow:0 1px 2px rgba(11,16,32,.06),0 8px 24px rgba(11,16,32,.06);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#080B14; --panel:#0F1424; --ink:#EEF1F8; --muted:#939DB8;
+    --line:rgba(238,241,248,.14); --code:#141A2C; --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 30px rgba(0,0,0,.4);
+    --kick:#5B84FF; --keep:#FF4E74;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#080B14; --panel:#0F1424; --ink:#EEF1F8; --muted:#939DB8;
+  --line:rgba(238,241,248,.14); --code:#141A2C; --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 30px rgba(0,0,0,.4);
+  --kick:#5B84FF; --keep:#FF4E74;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:0 24px}
+a{color:var(--kick)}
+h1,h2,h3{text-wrap:balance;line-height:1.15;margin:0}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+
+header{padding:20px 0 8px}
+.brandrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--kick);box-shadow:0 0 0 4px color-mix(in srgb,var(--kick) 18%,transparent)}
+.brand{font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:var(--muted)}
+
+.hero{padding:34px 0 8px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:clamp(40px,7vw,68px);font-weight:800;letter-spacing:-.025em;margin:12px 0 0}
+h1 .k{color:var(--kick)} h1 .p{color:var(--keep)}
+.lede{font-size:clamp(17px,2.1vw,20px);color:var(--muted);max-width:60ch;margin:14px 0 0}
+
+/* THE HERO IS THE PRODUCT: the rope actually moves, the way it does on air. */
+.rope{margin:30px 0 6px;background:var(--panel);border:1px solid var(--line);
+  border-radius:16px;padding:20px;box-shadow:var(--shadow)}
+.ropelabels{display:flex;justify-content:space-between;font-size:12px;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase}
+.ropelabels .a{color:var(--kick)} .ropelabels .b{color:var(--keep)}
+.bar{position:relative;height:34px;border-radius:999px;overflow:hidden;margin:10px 0 8px;
+  background:linear-gradient(90deg,var(--kick) 0 50%,var(--keep) 50% 100%)}
+.knot{position:absolute;top:-5px;bottom:-5px;width:6px;border-radius:3px;background:var(--ink);
+  left:50%;transform:translateX(-50%);animation:tug 9s ease-in-out infinite}
+.bar::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent)}
+@keyframes tug{0%{left:50%}18%{left:63%}36%{left:41%}54%{left:72%}72%{left:35%}100%{left:50%}}
+@media (prefers-reduced-motion:reduce){.knot{animation:none}}
+.ropefoot{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin:26px 0 6px}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:13px 20px;border-radius:11px;
+  font-weight:650;text-decoration:none;border:1px solid transparent;transition:transform .12s ease}
+.btn:hover{transform:translateY(-1px)}
+.btn.primary{background:var(--kick);color:#fff}
+.btn.ghost{background:var(--panel);color:var(--ink);border-color:var(--line);box-shadow:var(--shadow)}
+.btn small{font-weight:500;opacity:.8}
+.verline{font-size:13px;color:var(--muted);margin-top:12px}
+
+section{padding:44px 0;border-top:1px solid var(--line);margin-top:44px}
+h2{font-size:clamp(22px,3vw,28px);font-weight:750;letter-spacing:-.015em}
+.sub{color:var(--muted);margin:8px 0 0;max-width:62ch}
+
+pre{background:var(--code);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  overflow-x:auto;margin:16px 0 0;font-size:14px}
+.steps{list-style:none;padding:0;margin:22px 0 0;display:grid;gap:14px}
+.steps li{display:grid;grid-template-columns:32px 1fr;gap:14px;align-items:start;
+  background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px 18px;box-shadow:var(--shadow)}
+.num{width:32px;height:32px;border-radius:9px;background:var(--kick);color:#fff;font-weight:700;
+  display:grid;place-items:center;font-size:14px}
+.steps b{display:block;margin-bottom:3px}
+.steps p{margin:0;color:var(--muted);font-size:15px}
+
+.tablewrap{overflow-x:auto;margin-top:20px}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:15px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:700}
+td code{background:var(--code);padding:2px 7px;border-radius:6px;font-size:13.5px}
+
+.cards{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;box-shadow:var(--shadow)}
+.card b{display:block;margin-bottom:5px}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+.card .sig{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:var(--keep);
+  font-weight:650;display:block;margin-bottom:6px}
+
+footer{border-top:1px solid var(--line);margin-top:52px;padding:26px 0 42px;
+  color:var(--muted);font-size:14px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="brandrow"><span class="dot"></span><span class="brand">Digital Ground Game</span></div>
+  </header>
+
+  <div class="hero">
+    <span class="eyebrow">Stream overlay · TBAT</span>
+    <h1><span class="k">Kick</span> or <span class="p">Keep</span></h1>
+    <p class="lede">A donation tug-of-war for the stream. Kick money fills the pot;
+      keep money pushes the goal further away. The rope moves live while people give,
+      and the KICKED card holds on screen until the operator starts the next guest.</p>
+
+    <div class="rope" aria-hidden="true">
+      <div class="ropelabels"><span class="a">Kick — fills the pot</span><span class="b">Keep — pushes the goal</span></div>
+      <div class="bar"><span class="knot"></span></div>
+      <div class="ropefoot"><span>$0 to go</span><span>Goal moves as they keep</span></div>
+    </div>
+
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/digitalgroundgame/TBAT-Kick-or-Keep/releases/latest/download/kit.zip">
+        Download the kit <small>· zip</small></a>
+      <a class="btn ghost" href="control-room.html">Open the control room</a>
+      <a class="btn ghost" href="https://github.com/digitalgroundgame/TBAT-Kick-or-Keep/releases/latest">All versions</a>
+    </div>
+    <p class="verline">No account, no install, no network. It runs off a USB stick.
+      Every release is frozen — the version you download today stays downloadable.</p>
+  </div>
+
+  <section>
+    <h2>Running it</h2>
+    <p class="sub">Two things happen on the operator's machine: the relay runs in a terminal,
+      and the control room is a page you keep open.</p>
+    <ol class="steps">
+      <li><span class="num">1</span><div><b>Unzip the kit and start the relay</b>
+        <p>Node is the only requirement. Leave this window open for the whole stream.</p>
+        <pre>node relay.js</pre></div></li>
+      <li><span class="num">2</span><div><b>Open <code>control-room.html</code></b>
+        <p>This is the operator's screen — the buttons, the pot, the guest timer. It explains
+           itself on the page, so there is nothing to memorise.</p></div></li>
+      <li><span class="num">3</span><div><b>Add <code>overlay.html</code> to OBS as a Browser Source</b>
+        <p>It is transparent by design. On its own it looks like nothing — that is correct;
+           it only draws once the control room sends it something.</p></div></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What is in the box</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>File</th><th>What it is</th></tr></thead>
+        <tbody>
+          <tr><td><code>overlay.html</code></td><td>The graphic OBS shows.</td></tr>
+          <tr><td><code>control-room.html</code></td><td>The operator's buttons.</td></tr>
+          <tr><td><code>relay.js</code></td><td>Connects the two. Node, no dependencies.</td></tr>
+          <tr><td><code>README.md</code></td><td>Setup, the query parameters, and what to do when nothing is happening.</td></tr>
+          <tr><td><code>EVENTS.md</code></td><td>For a developer wiring real donations in.</td></tr>
+          <tr><td><code>manifest.json</code></td><td>The version, and a checksum for every file above.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>When nothing is happening</h2>
+    <p class="sub">The control room says which of these it is, in the status line under the buttons.
+      This is the part worth reading before the stream, not during it.</p>
+    <div class="cards">
+      <div class="card"><span class="sig">DISCONNECTED</span><b>OBS is not following the buttons</b>
+        <p>The relay stopped, or was never started. Start it again — the page reconnects on its own.</p></div>
+      <div class="card"><span class="sig">NOT SENT</span><b>That press did not reach OBS</b>
+        <p>The click was real but the connection was not. Wait a moment and press it again.</p></div>
+      <div class="card"><span class="sig">KICKED, stuck</span><b>That is on purpose</b>
+        <p>The card holds until you press play, so nothing moves on before the next guest sits down.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Sending real donations</h2>
+    <p class="sub">The overlay does not read your donation platform directly; something sends it an
+      event. There are three ways to do that, and <a href="EVENTS.md">EVENTS.md</a> opens with a
+      runnable example rather than a specification.</p>
+    <p class="sub" style="margin-top:14px">If you report a problem, quote the version — it is on the
+      control room and in <code>manifest.json</code>. It tells us exactly which bytes you are running.</p>
+  </section>
+
+  <footer>
+    <span>Kick or Keep — built for Digital Ground Game.</span>
+    <span><a href="https://github.com/digitalgroundgame/TBAT-Kick-or-Keep">Repository</a> ·
+          <a href="README.md">README</a> ·
+          <a href="https://github.com/digitalgroundgame/TBAT-Kick-or-Keep/releases">Releases</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

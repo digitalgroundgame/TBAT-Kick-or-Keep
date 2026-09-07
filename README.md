@@ -8,6 +8,16 @@ any platform, no account and no network**.
 The build you have is named in [`manifest.json`](manifest.json), and
 `node relay.js` prints it on every start.
 
+| | |
+|---|---|
+| **Page** | https://digitalgroundgame.github.io/TBAT-Kick-or-Keep/ |
+| **Download the kit** | [latest release](https://github.com/digitalgroundgame/TBAT-Kick-or-Keep/releases/latest) (`kit.zip` + checksum) |
+| **Try the control room** | https://digitalgroundgame.github.io/TBAT-Kick-or-Keep/control-room.html |
+
+Take the kit from a **release**, not from the page: the page's copy is
+replaced every time we publish, while a release is frozen, so the build you
+put on the rig stays downloadable exactly as it was.
+
 ## Run the whole show — one command
 
 ```
