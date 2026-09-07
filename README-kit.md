@@ -1,6 +1,6 @@
 # Tug-of-War donation overlay -- operator kit
 
-Kit version **2026.09.06.659f16f** (commit `659f16fd5f`)
+Kit version **2026.09.06.715c988** (commit `715c9887a2`)
 
 This is the whole show in one folder: the graphic OBS displays, the page you
 drive it from, and the small program that connects them. It runs off a USB

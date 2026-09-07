@@ -6,7 +6,7 @@
     },
     "README.md": {
       "bytes": 4557,
-      "sha256": "ff8d159f5fec4e0c77c27ef8e28a4de010e725e6bf19273cbb235d448d30cb3d"
+      "sha256": "5937a9bb6edfcfc4c530bfbf14866114d45c951a6ea06d4197fe868be9d7f794"
     },
     "control-room.html": {
       "bytes": 20490,
@@ -22,6 +22,6 @@
     }
   },
   "kit": "tugofwar",
-  "source_commit": "659f16fd5febba78410a364bea63a7d1589fe137",
-  "version": "2026.09.06.659f16f"
+  "source_commit": "715c9887a204790658658d3d6b7a87af44e8bc11",
+  "version": "2026.09.06.715c988"
 }
